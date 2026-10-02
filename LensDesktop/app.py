@@ -52,6 +52,7 @@ from .sources import CameraWorker, SourceError, StaticSource, normalize_bgr, fra
 from .processing import (
     ImageError, SkyBackground, default_background_path, example_source_path,
     place_layer, unplace_point, write_image_bgr,
+    ChromaKeySettings, chroma_key, fit_layer, remap_layer,
 )
 
 # Set window extent
@@ -166,7 +167,10 @@ def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False):
     )
 
 
-def inverse_remap_image(lensed_img, x_idx, y_idx, mask_radius, base_w, base_h, *, return_alpha=False):
+def inverse_remap_image(
+    lensed_img, x_idx, y_idx, mask_radius, base_w, base_h,
+    *, return_alpha=False, input_alpha=None,
+):
     """
     Optimized inverse remapping using flat indexing and manual filling of the 2D histogram
     that becomes the reconstructed source. When precomputed for fixed parameters, it is possible
@@ -183,6 +187,10 @@ def inverse_remap_image(lensed_img, x_idx, y_idx, mask_radius, base_w, base_h, *
         The histogram indices obtained from the mapping to the source plane.
     mask_radius=-1 : int
         Radius of the mask that can be used to avoid contamination from lens light.
+    input_alpha : numpy.array, optional
+        For keyed input, lensed_img contains premultiplied color. Reconstruct color
+        and alpha with the same sample counts, leaving unsampled pixels transparent.
+        Without alpha, retain the legacy opaque reconstruction.
 
     Returns
     -------
@@ -206,6 +214,16 @@ def inverse_remap_image(lensed_img, x_idx, y_idx, mask_radius, base_w, base_h, *
     # Accumulate values
     np.add.at(inv_img, flat_indices, flat_img)
     np.add.at(count, flat_indices, 1)
+
+    if input_alpha is not None:
+        if input_alpha.shape != (h, w):
+            raise ImageError("Inverse color and alpha dimensions must agree.")
+        reconstructed_alpha = np.zeros(h * w, np.float32)
+        np.add.at(reconstructed_alpha, flat_indices, input_alpha.reshape(-1)[r2])
+        count[count == 0] = 1
+        alpha = np.clip((reconstructed_alpha / count).reshape(h, w), 0, 1)
+        color = (inv_img / count[:, None]).reshape(h, w, 3)
+        return np.clip(color, 0, alpha[..., None] * 255), alpha
 
     # Avoid division by zero
     mask = count == 0
@@ -375,6 +393,20 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.freeze_input.clicked.connect(self._freeze_input)
         self.settings_panel.save_input.clicked.connect(self.save_input_image)
         self.settings_panel.input_fitting.currentIndexChanged.connect(self.update_view)
+        self._keyed_input_cache = None
+        self.settings_panel.key_color.clicked.connect(self._choose_key_color)
+        self.settings_panel.key_enabled.toggled.connect(self.update_view)
+        for control in (
+            self.settings_panel.key_tolerance, self.settings_panel.key_softness,
+            self.settings_panel.key_saturation, self.settings_panel.key_spill,
+        ):
+            control.valueChanged.connect(self.update_view)
+        for control in (
+            self.settings_panel.input_frame_mode, self.settings_panel.input_mirror,
+            self.settings_panel.input_preview,
+        ):
+            control.currentIndexChanged.connect(self.update_view)
+        self.settings_panel.reset_input.clicked.connect(self._reset_input_settings)
         self.settings_panel.load_background.clicked.connect(self._choose_background)
         self.settings_panel.clear_background.clicked.connect(self._clear_background)
         self.settings_panel.default_background.clicked.connect(self._default_background)
@@ -841,6 +873,130 @@ class LensDesktop(QtWidgets.QMainWindow):
             panel.source_offset_y.setValue(0)
         self.update_view()
 
+    def _choose_key_color(self):
+        panel = self.settings_panel
+        color = QtWidgets.QColorDialog.getColor(QtGui.QColor(*panel.key_color_rgb), self, "Key color")
+        if not color.isValid():
+            return
+        if color.hsvSaturation() < 16:
+            self._source_status("Choose a saturated key color, not black, white, or gray.", error=True)
+            return
+        panel.key_color_rgb = (color.red(), color.green(), color.blue())
+        panel.update_key_color_label()
+        self.update_view()
+
+    def _reset_input_settings(self):
+        panel = self.settings_panel
+        defaults = ChromaKeySettings()
+        controls = (
+            panel.key_enabled, panel.key_tolerance, panel.key_softness,
+            panel.key_saturation, panel.key_spill, panel.input_frame_mode,
+            panel.input_mirror, panel.input_preview, panel.input_fitting,
+        )
+        blockers = [QtCore.QSignalBlocker(control) for control in controls]
+        panel.key_enabled.setChecked(defaults.enabled)
+        panel.key_color_rgb = defaults.color
+        panel.update_key_color_label()
+        panel.key_tolerance.setValue(int(defaults.tolerance))
+        panel.key_softness.setValue(int(defaults.softness))
+        panel.key_saturation.setValue(int(defaults.saturation * 100))
+        panel.key_spill.setValue(int(defaults.spill * 100))
+        for control in (panel.input_frame_mode, panel.input_mirror, panel.input_preview):
+            control.setCurrentIndex(0)
+        panel.input_fitting.setCurrentIndex(0 if self.static_source.path is not None else 1)
+        del blockers
+        panel.set_key_controls_enabled(defaults.enabled)
+        self.update_view()
+
+    def _input_framing(self):
+        panel = self.settings_panel
+        mode = panel.input_frame_mode.currentData()
+        if mode == "default":
+            mode = (
+                panel.input_fitting.currentData() if self.static_active
+                else "fill" if self.cam else "stretch"
+            )
+        mirror = panel.input_mirror.currentData()
+        if mirror == "default":
+            mirror = self.static_source.mirror if self.static_active else self.cam
+        else:
+            mirror = mirror == "on"
+        return mode, mirror
+
+    def _keyed_input(self, frame):
+        settings = self.settings_panel.chroma_settings()
+        mode, mirror = self._input_framing()
+        configuration = (settings, mode, mirror, self.base_w, self.base_h)
+        cached = self._keyed_input_cache
+        if not self.static_active or cached is None or cached[0] is not frame or cached[1] != configuration:
+            rgb, alpha = chroma_key(frame, settings)
+            rgb, alpha = fit_layer(rgb, alpha, self.base_w * 2, self.base_h * 2, mode, mirror=mirror)
+            if self.static_active:
+                rgb.setflags(write=False)
+                alpha.setflags(write=False)
+                self._keyed_input_cache = (frame, configuration, rgb, alpha)
+        else:
+            rgb, alpha = cached[2:]
+        return rgb, alpha
+
+    def _set_image_rgb(self, rgb):
+        if rgb.dtype != np.uint8:
+            rgb = np.clip(np.rint(rgb), 0, 255).astype(np.uint8)
+        rgb = np.ascontiguousarray(rgb)
+        height, width = rgb.shape[:2]
+        image = QtGui.QImage(rgb.data, width, height, width * 3, QtGui.QImage.Format_RGB888)
+        self.label.setPixmap(QtGui.QPixmap.fromImage(image))
+
+    def _show_input_preview(self, frame):
+        if self.settings_panel.input_preview.currentData() == "mask":
+            _, alpha = self._keyed_input(frame)
+            image = np.repeat((alpha * 255)[..., None], 3, axis=2)
+        else:
+            rgb, alpha = chroma_key(frame, ChromaKeySettings())
+            mode, mirror = self._input_framing()
+            image, _ = fit_layer(rgb, alpha, self.base_w * 2, self.base_h * 2, mode, mirror=mirror)
+        image = cv2.resize(image, (self.base_w, self.base_h), interpolation=cv2.INTER_AREA)
+        self._set_image_rgb(np.hstack((image, image)) if self.dual_checkbox.isChecked() else image)
+
+    def _update_keyed_view(self, rgb, alpha):
+        if self.inverse_checkbox.isChecked():
+            source, source_alpha = fit_layer(rgb, alpha, self.base_w, self.base_h, "stretch")
+            self.inverse_ps_show(source, source_alpha)
+            if self.dual_checkbox.isChecked():
+                yy, xx = np.indices(source_alpha.shape)
+                excluded = (yy - self.base_h // 2) ** 2 + (xx - self.base_w // 2) ** 2 <= self.mask_radius**2
+                source[excluded] = 0
+                source_alpha[excluded] = 0
+            transformed, transformed_alpha = self.inv_map(source, input_alpha=source_alpha)
+            if self.critical_checkbox.isChecked():
+                contours = self.get_critical(source, source_alpha)
+                self.get_caustics(transformed, contours, transformed_alpha)
+        else:
+            if self.ellipses_image_plane or self.ellipses_source_plane:
+                alpha = alpha.copy()
+                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                self.show_ps(bgr, alpha)
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            source, source_alpha = fit_layer(rgb, alpha, self.base_w, self.base_h, "stretch")
+            Lx = 2 * self.base_w / max(self.base_w, self.base_h)
+            Ly = 2 * self.base_h / max(self.base_w, self.base_h)
+            transformed, transformed_alpha = remap_layer(
+                rgb, alpha, self.map_x * 2 / Lx, self.map_y * 2 / Ly,
+            )
+            if self.lenslight_checkbox.isChecked() and self.b_value > 0:
+                transformed = draw_lens_light(
+                    self.b_value, self.kappa, transformed, self.base_w, self.base_h,
+                )
+                light_alpha = np.clip(np.log10(1 + self.kappa), 0, 1)
+                transformed_alpha = transformed_alpha * (1 - light_alpha) + light_alpha
+            if self.critical_checkbox.isChecked():
+                contours = self.get_critical(transformed, transformed_alpha)
+                self.get_caustics(source, contours, source_alpha)
+        image = self._compose_layer(transformed, transformed_alpha)
+        if self.dual_checkbox.isChecked():
+            image = np.hstack((self._compose_layer(source, source_alpha), image))
+        self._set_image_rgb(image)
+
     def _compose_layer(self, rgb, alpha):
         background = self.background.fitted(
             self.base_w, self.base_h, self.settings_panel.background_mode.currentData()
@@ -1119,7 +1275,23 @@ class LensDesktop(QtWidgets.QMainWindow):
             frame = self._acquire_source_frame()
             if frame is None:
                 return False
-            if self.static_active:
+            if self.settings_panel.input_preview.currentData() != "scene":
+                self._show_input_preview(frame)
+                return True
+            if self.settings_panel.key_enabled.isChecked():
+                self._update_keyed_view(*self._keyed_input(frame))
+                return True
+            if (
+                self.settings_panel.input_frame_mode.currentData() != "default"
+                or self.settings_panel.input_mirror.currentData() != "default"
+            ):
+                rgb, alpha = chroma_key(frame, ChromaKeySettings())
+                mode, mirror = self._input_framing()
+                rgb, _ = fit_layer(
+                    rgb, alpha, self.base_w * 2, self.base_h * 2, mode, mirror=mirror,
+                )
+                frame = cv2.cvtColor(np.rint(rgb).astype(np.uint8), cv2.COLOR_RGB2BGR)
+            elif self.static_active:
                 frame = self.static_source.render_frame(
                     self.base_w, self.base_h, self.settings_panel.input_fitting.currentData()
                 )
@@ -1144,7 +1316,7 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     # Forward Updates
 
-    def show_ps(self, img_bgr):
+    def show_ps(self, img_bgr, alpha=None):
         if len(self.ellipses_image_plane) > 0 or len(self.ellipses_source_plane) > 0:
 
             if len(self.ellipses_image_plane) > 0:
@@ -1188,6 +1360,8 @@ class LensDesktop(QtWidgets.QMainWindow):
                     color,  # color
                     -1,  # thickness
                 )
+            if alpha is not None:
+                cv2.ellipse(alpha, (x_source, y_source), (ps, ps), 0, 0, 360, 1.0, -1)
 
     def update_single_view(self, img_bgr):
 
@@ -1242,7 +1416,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.label.setPixmap(result_pixmap)
 
     # Inverse Updates
-    def inverse_ps_show(self, img_bgr):
+    def inverse_ps_show(self, img_bgr, alpha=None):
         if len(self.ellipses_image_plane) > 0 or len(self.ellipses_source_plane) > 0:
 
             if len(self.ellipses_source_plane) > 0:
@@ -1287,6 +1461,10 @@ class LensDesktop(QtWidgets.QMainWindow):
                                     color,  # color
                                     -1,  # thickness
                                 )
+                            if alpha is not None:
+                                cv2.ellipse(
+                                    alpha, (int(x0), int(y0)), (ps // 2, ps // 2), 0, 0, 360, 1.0, -1,
+                                )
 
             if len(self.ellipses_image_plane) > 0:
                 x0 = self.ellipses_image_plane[0][0]
@@ -1306,6 +1484,8 @@ class LensDesktop(QtWidgets.QMainWindow):
                         color,  # color
                         -1,  # thickness
                     )
+                if alpha is not None:
+                    cv2.ellipse(alpha, (int(x0), int(y0)), (ps // 2, ps // 2), 0, 0, 360, 1.0, -1)
 
     def update_inverse_single_view(self, frame):
         """
@@ -1381,6 +1561,9 @@ class LensDesktop(QtWidgets.QMainWindow):
             self.old_pos = event.globalPos()
 
         if event.button() == QtCore.Qt.RightButton:
+            if self.settings_panel.input_preview.currentData() != "scene":
+                self._source_status("Select Composed scene preview to place markers.")
+                return
             # I thank Christopher Pattison and Sergi Sirera Lahoz for this nice idea!
 
             if (

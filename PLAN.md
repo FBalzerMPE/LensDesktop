@@ -105,7 +105,7 @@ LensDesktop/
     controls.py    Layout-managed settings panel and control signals
     qt_compat.py   Shared binding loader so application and panel use the same Qt
     sources.py     Desktop/webcam/static normalization, selection, worker and cleanup
-    processing.py  Sky loading/cache, fitting, placement and composition; keying planned
+    processing.py  Sky loading/cache, fitting, chroma keying, alpha remapping and composition
     scene.py       Planned: scene result and detached export snapshot
 tests/
     test_ui.py          Panel, canvas, controls and image-export checks
@@ -117,6 +117,8 @@ tests/
     test_resources.py Bundled image/attribution paths and relocated resource layout
     test_static_source.py Native input ownership, cached fitting and calibration export
     test_static_ui.py Static selection, freeze/resume, all views and native input saving
+    test_chroma_key.py Key/matte, spill, framing, halo and actual hand-photo checks
+    test_chroma_ui.py Keyed views, inverse alpha, previews, webcam transitions and exports
 data/
     euclid_patch_example.jpg  User-supplied default sky
     example_gs_pic.jpeg       User-supplied greenscreen calibration hand photo
@@ -313,8 +315,8 @@ not discard input; cancelled camera requests cannot replace a static source.
 rendering and markers use detached buffers. Desktop capture now retains native
 pixels, with resizing performed at the shared rendering boundary. Camera
 freezing releases the device; Desktop/Webcam resume live acquisition. Loaded
-images start in Fit without mirroring. Greenscreen keying, mask preview, and
-spill suppression remain pending under T010-T012.
+images start in Fit without mirroring. This preparation batch preceded the
+greenscreen implementation under T010-T012 described below.
 All 85 regression tests pass at 1.5 offscreen scaling, including 22 new static
 source/UI checks and extended relocated-resource tests. Native Windows preview
 with the actual hand photo and Euclid sky passed and was visually checked;
@@ -334,15 +336,33 @@ transparency from black pixel values. With keying disabled, use an opaque mask.
 Preview must distinguish the source, mask, and final composition without
 changing the lens parameters.
 
-- [ ] T010 [Plan:4.1,4.2] Implement framing, mirroring, configurable chroma keying, edge softness, and spill suppression in `LensDesktop/processing.py`.
-- [ ] T011 [Plan:4.1] Add grouped input/key controls, preview selection, and Reset in `LensDesktop/controls.py`; hide or disable irrelevant controls with an explanation.
-- [ ] T012 [Plan:4.2] Integrate input settings and preview handling in `LensDesktop/app.py`, keeping unmodified source frames separate from processed buffers.
+- [x] T010 [Plan:4.1,4.2] Implement framing, mirroring, configurable chroma keying, edge softness, and spill suppression in `LensDesktop/processing.py`.
+- [x] T011 [Plan:4.1] Add grouped input/key controls, preview selection, and Reset in `LensDesktop/controls.py`; hide or disable irrelevant controls with an explanation.
+- [x] T012 [Plan:4.2] Integrate input settings and preview handling in `LensDesktop/app.py`, keeping unmodified source frames separate from processed buffers.
 
 **Acceptance:** A webcam subject retains visible colors, green areas become
 transparent, soft edges blend cleanly, and legitimate dark/black subject pixels
 remain visible. Disabling keying restores opaque input, and Reset restores
 documented defaults. The pipeline accepts synthetic sample frames without a
 physical webcam, but final tuning must be checked with the actual greenscreen.
+
+**Implementation status:** T010-T012 are implemented. Keying is opt-in and uses
+wrapped HSV hue distance, saturation protection, a smooth alpha transition, and
+configurable spill suppression. Defaults are green-cyan `#00ff80`, tolerance
+30 degrees, softness 12 degrees, minimum saturation 20%, and spill 50%.
+Framing/mirror overrides work for desktop, webcam and static input. Original
+source and alpha-mask previews bypass lensing and placement; scene preview
+restores normal interaction. Reset retains source/lens/sky settings and disables
+keying. Source pixels and static cached mattes remain unmodified by overlays
+or exports. Static processing is reused across lens/placement changes.
+
+The supplied hand photograph removes 100% of pixels in the tested cloth ROI
+and retains 100% in the tested bright-skin and interior shadowed-arm ROIs.
+These are regional checks, not a ground-truth full-image segmentation score.
+All 108 regression tests pass at 1.5 offscreen scaling, including 23 new
+keying/UI checks. Native Windows dual-view preview was visually checked with
+the actual photo/Euclid sky and clean shutdown. Webcam checks use simulated
+devices; physical lighting, hair edges and spill still need hands-on calibration.
 
 ### Phase 5: Transparent lensing and consistent output
 
@@ -379,11 +399,32 @@ that result without control widgets. Snapshot arrays must be detached copies,
 not buffers that the next timer tick will mutate. Report file-write failures.
 Sequence capture restores parameters and render state even if export fails.
 
-- [ ] T013 [Plan:5.1] Implement transparent forward transformation/composition helpers in `LensDesktop/processing.py`, reusing existing lens maps from `LensDesktop/app.py`.
-- [ ] T014 [Plan:5.2] Add an alpha-aware inverse reconstruction path alongside `inverse_remap_image()` in `LensDesktop/app.py`, preserving its legacy opaque path.
+- [x] T013 [Plan:5.1] Implement transparent forward transformation/composition helpers in `LensDesktop/processing.py`, reusing existing lens maps from `LensDesktop/app.py`.
+- [x] T014 [Plan:5.2] Add an alpha-aware inverse reconstruction path alongside `inverse_remap_image()` in `LensDesktop/app.py`, preserving its legacy opaque path.
 - [ ] T015 [Plan:5.3] Define the scene result and detached snapshot structures in `LensDesktop/scene.py`, including lens/input settings and optional sky attribution.
-- [ ] T016 [Plan:5.1,5.2] Wire the shared scene pipeline into the four rendering paths and overlays in `LensDesktop/app.py`, using one acquired frame per displayed scene.
+- [x] T016 [Plan:5.1,5.2] Wire the shared scene pipeline into the four rendering paths and overlays in `LensDesktop/app.py`, using one acquired frame per displayed scene.
 - [ ] T017 [Plan:5.3] Update `save_screenshot()` and `recording()` in `LensDesktop/app.py` to export the composed scene consistently and handle cancellation/write errors/state restoration.
+
+**Partial Phase 5 implementation:** T013, T014 and T016 are complete alongside
+greenscreen removal. The keyed path premultiplies color before framing/remapping
+and uses linear sampling for bounded, halo-free alpha edges. Opaque input keeps
+its existing cubic forward/legacy inverse behavior. Keyed inverse reconstruction
+averages color and alpha with identical counts and transparent excluded/unsampled
+pixels. Sky composition and post-lens placement remain shared. Curves, markers,
+and forward lens light explicitly contribute alpha after keying.
+
+Keyed screenshots and inverse sequences are tested, including radius restoration
+and the separate native calibration export. Diagnostic previews export what is
+displayed; select Composed scene for lensed sequences. T015/T017 remain open for
+the formal detached scene-result/snapshot boundary and later A4 metadata.
+
+Controlled native static dual-view measurements after avoiding redundant color
+conversion/copies: 365 pixels per panel, opaque 40.99 ms / keyed 42.46 ms;
+730 pixels per panel, opaque 123.50 ms / keyed 131.20 ms. Native 1200x1600 matte
+computation was 120.10 ms and is cached for static input. These timings are not
+webcam FPS guarantees; the 30 Hz target is not reached at these canvas sizes.
+No input resolution or output quality is silently reduced. Live driver and
+full pipeline benchmarking under T021 remain pending.
 
 **Acceptance:** At fixed canvas dimensions, changing lens parameters leaves
 background-only pixels identical to the fitted sky. Fully transparent

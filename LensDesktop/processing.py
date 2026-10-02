@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -6,6 +7,110 @@ import numpy as np
 
 class ImageError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ChromaKeySettings:
+    enabled: bool = False
+    color: tuple[int, int, int] = (0, 255, 128)
+    tolerance: float = 30
+    softness: float = 12
+    saturation: float = 0.2
+    spill: float = 0.5
+
+    def __post_init__(self):
+        if len(self.color) != 3 or any(
+            not isinstance(value, int) or not 0 <= value <= 255 for value in self.color
+        ):
+            raise ImageError("Key color must contain three RGB values from 0 to 255.")
+        for value, maximum in (
+            (self.tolerance, 180), (self.softness, 90),
+            (self.saturation, 1), (self.spill, 1),
+        ):
+            if not np.isfinite(value) or not 0 <= value <= maximum:
+                raise ImageError("Chroma-key settings are outside their supported range.")
+
+
+def chroma_key(frame: np.ndarray, settings: ChromaKeySettings) -> tuple[np.ndarray, np.ndarray]:
+    if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3 or frame.size == 0:
+        raise ImageError("Chroma keying requires a nonempty uint8 BGR image.")
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32)
+    alpha = np.ones(frame.shape[:2], np.float32)
+    if not settings.enabled:
+        return rgb, alpha
+    key = cv2.cvtColor(np.array([[settings.color]], np.uint8), cv2.COLOR_RGB2HSV)[0, 0]
+    if key[1] < 16:
+        raise ImageError("Choose a saturated key color, not black, white, or gray.")
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    distance = np.abs(hsv[..., 0].astype(np.float32) * 2 - float(key[0]) * 2)
+    distance = np.minimum(distance, 360 - distance)
+    if settings.softness:
+        alpha = np.clip((distance - settings.tolerance) / settings.softness, 0, 1)
+        alpha = alpha * alpha * (3 - 2 * alpha)
+    else:
+        alpha = (distance > settings.tolerance).astype(np.float32)
+    chromatic = (hsv[..., 1] >= settings.saturation * 255) & (hsv[..., 1] > 0)
+    alpha[~chromatic] = 1
+    if settings.spill:
+        channel = int(np.argmax(settings.color))
+        others = [index for index in range(3) if index != channel]
+        excess = np.maximum(
+            rgb[..., channel] - np.maximum(rgb[..., others[0]], rgb[..., others[1]]), 0
+        )
+        proximity = np.clip(
+            1 - distance / (settings.tolerance + settings.softness + 30), 0, 1
+        )
+        rgb[..., channel] -= excess * proximity * chromatic * settings.spill
+    return rgb * alpha[..., None], alpha
+
+
+def fit_layer(
+    color: np.ndarray, alpha: np.ndarray, width: int, height: int, mode: str,
+    *, mirror: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    if width <= 0 or height <= 0 or mode not in ("fit", "fill", "stretch"):
+        raise ImageError("Input framing requires positive dimensions and fit/fill/stretch mode.")
+    if alpha.ndim != 2 or alpha.size == 0 or color.shape != (*alpha.shape, 3):
+        raise ImageError("Input color and alpha dimensions must agree.")
+    source_h, source_w = alpha.shape
+    if mode == "stretch":
+        resized_w, resized_h = width, height
+    else:
+        ratios = (width / source_w, height / source_h)
+        factor = min(ratios) if mode == "fit" else max(ratios)
+        resized_w, resized_h = max(1, round(source_w * factor)), max(1, round(source_h * factor))
+    interpolation = (
+        cv2.INTER_AREA if resized_w <= source_w and resized_h <= source_h else cv2.INTER_LINEAR
+    )
+    color = cv2.resize(color, (resized_w, resized_h), interpolation=interpolation)
+    alpha = cv2.resize(alpha, (resized_w, resized_h), interpolation=interpolation)
+    if mode == "fit":
+        result = np.zeros((height, width, 3), color.dtype)
+        coverage = np.zeros((height, width), np.float32)
+        left, top = (width - resized_w) // 2, (height - resized_h) // 2
+        result[top:top + resized_h, left:left + resized_w] = color
+        coverage[top:top + resized_h, left:left + resized_w] = alpha
+        color, alpha = result, coverage
+    elif mode == "fill":
+        left, top = (resized_w - width) // 2, (resized_h - height) // 2
+        color = color[top:top + height, left:left + width]
+        alpha = alpha[top:top + height, left:left + width]
+    if mirror:
+        color, alpha = cv2.flip(color, 1), cv2.flip(alpha, 1)
+    return np.ascontiguousarray(color), np.ascontiguousarray(alpha)
+
+
+def remap_layer(
+    color: np.ndarray, alpha: np.ndarray, map_x: np.ndarray, map_y: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    color = cv2.remap(
+        color, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+    )
+    alpha = cv2.remap(
+        alpha, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+    )
+    alpha = np.clip(alpha, 0, 1)
+    return np.clip(color, 0, alpha[..., None] * 255), alpha
 
 
 def default_background_path() -> Path:
@@ -49,24 +154,8 @@ def _validate_fit(width: int, height: int, mode: str):
 
 def fit_background(image: np.ndarray, width: int, height: int, mode: str) -> np.ndarray:
     _validate_fit(width, height, mode)
-    source_h, source_w = image.shape[:2]
-    ratios = (width / source_w, height / source_h)
-    factor = min(ratios) if mode == "fit" else max(ratios)
-    resized_w = max(1, round(source_w * factor))
-    resized_h = max(1, round(source_h * factor))
-    resized = cv2.resize(
-        image, (resized_w, resized_h),
-        interpolation=cv2.INTER_AREA if factor < 1 else cv2.INTER_LINEAR,
-    )
-    if mode == "fill":
-        left = (resized_w - width) // 2
-        top = (resized_h - height) // 2
-        return np.ascontiguousarray(resized[top:top + height, left:left + width])
-    result = np.zeros((height, width, 3), np.uint8)
-    left = (width - resized_w) // 2
-    top = (height - resized_h) // 2
-    result[top:top + resized_h, left:left + resized_w] = resized
-    return result
+    fitted, _ = fit_layer(image, np.ones(image.shape[:2], np.float32), width, height, mode)
+    return fitted
 
 
 class SkyBackground:
@@ -124,8 +213,8 @@ def place_layer(
     # Color is premultiplied before interpolation so transparent edges stay clean.
     height, width = background.shape[:2]
     matrix = placement_matrix(width, height, scale, x, y)
-    alpha = np.clip(alpha.astype(np.float32), 0, 1)
-    color = np.clip(rgb.astype(np.float32), 0, alpha[..., None] * 255)
+    alpha = np.clip(alpha.astype(np.float32, copy=False), 0, 1)
+    color = np.clip(rgb.astype(np.float32, copy=False), 0, alpha[..., None] * 255)
     if scale != 1 or x != 0 or y != 0:
         color = cv2.warpAffine(
             color, matrix, (width, height), flags=cv2.INTER_LINEAR,

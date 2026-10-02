@@ -91,7 +91,7 @@ marker. Clicking the settings panel does not place markers.
 
 Ctrl+V hides or restores the panel and toggles the window frame for presentation.
 Settings are retained. Screenshots export the image, not the settings panel.
-Greenscreen processing and A4 export are future phases
+Greenscreen controls are described below. A4 export remains a future phase
 described in [PLAN.md](PLAN.md).
 
 ### Sky background and source placement
@@ -121,9 +121,8 @@ composed scene, without controls.
 
 The sky is decoded once and its fitted version is cached. At the default 100%
 source size, an opaque webcam/desktop image may cover most of it; try 50-60% to
-see the sky around the source. The webcam's own background is still opaque:
-greenscreen removal is a separate upcoming feature. Black subject pixels are
-not treated as transparency.
+see the sky around the source. The webcam's own background remains opaque unless **Remove greenscreen** is
+enabled. Black subject pixels are not treated as transparency.
 
 ### Selecting a webcam
 
@@ -183,8 +182,60 @@ In the **Source** group:
 
 Cancelled dialogs and failed loads retain the previous source. Freeze/Save are
 disabled for a disconnected webcam; retry or choose another source first.
-Greenscreen removal and calibration controls are not implemented yet: this
-static workflow provides reproducible input for that next step.
+This static workflow provides reproducible input for greenscreen calibration.
+
+### Greenscreen removal
+
+1. Load **Hand example**, freeze a live frame, or select your webcam.
+2. In **Greenscreen / input**, enable **Remove greenscreen**. It is off by
+   default, so existing opaque desktop/webcam behavior remains unchanged.
+3. Select **Alpha mask** under **Preview** to calibrate: white is retained,
+   black is removed, and gray is a partially transparent edge. **Original source**
+   shows the framed/mirrored image without keying, lensing, sky, or overlays.
+4. Return to **Composed scene** to see the keyed subject over the sky. Dual view
+   shows the keyed original on the left and the lensed result on the right.
+
+The default key color is green-cyan (`#00ff80`), suitable for the supplied cloth:
+**Hue tolerance** 30 degrees, **Edge softness** 12 degrees,
+**Minimum saturation** 20%, and **Spill suppression** 50%.
+Click **Key color** to choose a different saturated color. Keying matches hue,
+including darker/lighter versions of the cloth; black, gray, and low-saturation
+pixels are protected. This is chroma keying, not semantic subject segmentation:
+subject colors matching the selected screen can also be removed.
+
+- Increase **Hue tolerance** to remove more color variation; decrease it if
+  subject colors disappear. **Edge softness** blends the next hue band rather
+  than blurring the image spatially.
+- Raise **Minimum saturation** to protect more neutral/skin pixels; lower it if
+  washed-out cloth remains. **Spill suppression** reduces excess key-channel
+  color near the selected hue without changing the mask.
+- **Input framing** offers Fit/Fill for all sources. **Source default** retains
+  the static Fit/Fill choice, center-crops webcams, and leaves desktop framing
+  unchanged. With keying enabled, Fit margins are transparent.
+- **Mirror** can override source defaults. Loaded photos/desktop are unmirrored;
+  live or frozen webcam input is mirrored by default. Color and mask always use
+  identical framing and mirroring.
+- **Reset input settings** disables keying, restores the above key defaults,
+  source-default framing/mirroring and Composed scene preview. It retains the
+  source and lens/sky settings, restoring Fit for loaded photos and Fill for
+  frozen input.
+
+Only foreground color and alpha pass through lensing; the sky stays unchanged.
+Forward keyed interpolation uses premultiplied color and linear sampling to
+avoid colored/dark halos. Inverse reconstruction averages premultiplied color
+and alpha with the same sample counts; unsampled/masked areas reveal the sky.
+Clearing the sky gives a black backdrop. Lens light, curves, and markers remain
+visible over removed areas. Marker placement is available in Composed scene,
+not the calibration previews.
+
+**Ctrl+S** exports the displayed scene or selected diagnostic preview.
+Sequences likewise export the selected view; use Composed scene for lensed
+sequences. **Save input...** always preserves unprocessed native pixels.
+Static keying/framing is cached until input/settings/canvas dimensions change.
+Live frames are keyed at native resolution; high-resolution webcams and large
+canvases can be CPU-heavy, and the timer's 30 Hz target is not a guaranteed rate.
+Actual camera lighting, shadows, hair edges, and spill should be tuned using
+the mask preview on your setup.
 
 ### Regression checks
 

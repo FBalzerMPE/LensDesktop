@@ -1,4 +1,5 @@
 from .qt_compat import QtCore, QtWidgets
+from .processing import ChromaKeySettings
 
 
 class SettingsPanel(QtWidgets.QScrollArea):
@@ -73,6 +74,62 @@ class SettingsPanel(QtWidgets.QScrollArea):
         )
         source_layout.addWidget(self.source_status)
         layout.addWidget(source_group)
+
+        input_group = QtWidgets.QGroupBox("Greenscreen / input")
+        input_layout = QtWidgets.QVBoxLayout(input_group)
+        self.key_enabled = QtWidgets.QCheckBox("Remove greenscreen")
+        input_layout.addWidget(self.key_enabled)
+        defaults = ChromaKeySettings()
+        self.key_color_rgb = defaults.color
+        self.key_color = QtWidgets.QPushButton()
+        self.update_key_color_label()
+        input_layout.addWidget(self.key_color)
+        key_form = QtWidgets.QFormLayout()
+        for name, title, maximum, value, suffix, tooltip in (
+            ("key_tolerance", "Hue tolerance", 180, defaults.tolerance, " deg",
+             "Hue distance from the key color that becomes fully transparent."),
+            ("key_softness", "Edge softness", 90, defaults.softness, " deg",
+             "Additional hue range blended from transparent to opaque."),
+            ("key_saturation", "Minimum saturation", 100, defaults.saturation * 100, " %",
+             "Protect low-saturation skin, gray and black from removal."),
+            ("key_spill", "Spill suppression", 100, defaults.spill * 100, " %",
+             "Reduce excess key-color channel near the selected hue."),
+        ):
+            control = QtWidgets.QSpinBox()
+            control.setRange(0, maximum)
+            control.setValue(int(value))
+            control.setSuffix(suffix)
+            control.setAccessibleName(title)
+            control.setToolTip(tooltip)
+            setattr(self, name, control)
+            key_form.addRow(title, control)
+        input_layout.addLayout(key_form)
+        self.key_enabled.toggled.connect(self.set_key_controls_enabled)
+        self.set_key_controls_enabled(False)
+        framing_form = QtWidgets.QFormLayout()
+        self.input_frame_mode = QtWidgets.QComboBox()
+        for text, data in (
+            ("Source default", "default"), ("Fit (whole image)", "fit"), ("Fill (center crop)", "fill")
+        ):
+            self.input_frame_mode.addItem(text, data)
+        self.input_mirror = QtWidgets.QComboBox()
+        for text, data in (("Source default", "default"), ("Unmirrored", "off"), ("Mirrored", "on")):
+            self.input_mirror.addItem(text, data)
+        self.input_preview = QtWidgets.QComboBox()
+        for text, data in (("Composed scene", "scene"), ("Original source", "source"), ("Alpha mask", "mask")):
+            self.input_preview.addItem(text, data)
+        self.input_preview.setToolTip("Mask: white is retained, black is removed. Previews bypass lensing and placement.")
+        for title, control in (
+            ("Input framing", self.input_frame_mode),
+            ("Mirror", self.input_mirror),
+            ("Preview", self.input_preview),
+        ):
+            control.setAccessibleName(title)
+            framing_form.addRow(title, control)
+        input_layout.addLayout(framing_form)
+        self.reset_input = QtWidgets.QPushButton("Reset input settings")
+        input_layout.addWidget(self.reset_input)
+        layout.addWidget(input_group)
 
         background_group = QtWidgets.QGroupBox("Sky background")
         background_layout = QtWidgets.QVBoxLayout(background_group)
@@ -170,6 +227,23 @@ class SettingsPanel(QtWidgets.QScrollArea):
             QtWidgets.QStyle.PM_ScrollBarExtent
         )
         self.setFixedWidth(max(240, content.sizeHint().width() + scrollbar_width))
+
+    def chroma_settings(self):
+        return ChromaKeySettings(
+            enabled=self.key_enabled.isChecked(), color=self.key_color_rgb,
+            tolerance=self.key_tolerance.value(), softness=self.key_softness.value(),
+            saturation=self.key_saturation.value() / 100, spill=self.key_spill.value() / 100,
+        )
+
+    def update_key_color_label(self):
+        self.key_color.setText("Key color: #{:02x}{:02x}{:02x}...".format(*self.key_color_rgb))
+
+    def set_key_controls_enabled(self, enabled):
+        for control in (
+            self.key_color, self.key_tolerance, self.key_softness,
+            self.key_saturation, self.key_spill,
+        ):
+            control.setEnabled(enabled)
 
     def set_inverse_mode(self, enabled):
         self.mask_controls.setVisible(enabled)
