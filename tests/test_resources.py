@@ -25,6 +25,7 @@ class ResourceTests(unittest.TestCase):
         self.assertIn((str(root / "data" / "euclid_abell_2764_example.jpeg"), "data"), paths)
         self.assertIn((str(root / "data" / "README.md"), "data"), paths)
         self.assertIn((str(root / "data" / "example_gs_pic.jpeg"), "data"), paths)
+        self.assertIn((str(root / "data" / "defaults.ini"), "data"), paths)
         self.assertTrue(all(Path(path).is_file() for path, _ in paths))
 
     def test_default_path_resolves_in_a_relocated_bundle(self):

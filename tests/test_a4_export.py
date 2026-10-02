@@ -9,8 +9,9 @@ import numpy as np
 
 from LensDesktop.a4_export import PAGE_SIZE_MM, PRINT_DPI, write_a4_pdf
 from LensDesktop.processing import ChromaKeySettings, ImageError
-from LensDesktop.qt_compat import QtGui, QtWidgets
+from LensDesktop.qt_compat import QtCore, QtGui, QtPrintSupport, QtWidgets
 from LensDesktop.scene import InputSettings, SceneSnapshot, sky_attribution
+from LensDesktop.a4_export import print_a4_snapshot
 
 
 class A4PdfTests(unittest.TestCase):
@@ -64,6 +65,25 @@ class A4PdfTests(unittest.TestCase):
                     write_a4_pdf(snapshot, path)
             self.assertEqual(path.read_bytes(), b"existing file")
             self.assertEqual(list(Path(directory).iterdir()), [path])
+
+    def test_printing_renders_the_same_single_a4_page(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "print.pdf"
+            printer = QtPrintSupport.QPrinter(QtPrintSupport.QPrinter.HighResolution)
+            printer.setOutputFormat(QtPrintSupport.QPrinter.PdfFormat)
+            printer.setOutputFileName(str(path))
+            printer.setPageLayout(
+                QtGui.QPageLayout(
+                    QtGui.QPageSize(QtGui.QPageSize.A4),
+                    QtGui.QPageLayout.Portrait,
+                    QtCore.QMarginsF(0, 0, 0, 0),
+                )
+            )
+            scene = print_a4_snapshot(self.snapshot(), printer)
+            data = path.read_bytes()
+        self.assertTrue(data.startswith(b"%PDF-"))
+        self.assertEqual(len(re.findall(rb"/Type\s*/Page\b", data)), 1)
+        self.assertEqual(scene.montage.shape[1], 2197)
 
     def test_default_and_custom_attribution_are_not_confused(self):
         data = Path(__file__).resolve().parent.parent / "data"

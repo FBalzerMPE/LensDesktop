@@ -4,6 +4,7 @@ import unittest
 import cv2
 import numpy as np
 
+from LensDesktop.lensing import draw_lens_light
 from LensDesktop.processing import ChromaKeySettings, ImageError, fit_background, place_layer
 from LensDesktop.scene import DisplaySettings, InputSettings, LensSettings, SceneSnapshot, render_snapshot
 
@@ -55,14 +56,30 @@ class SceneTests(unittest.TestCase):
             display=DisplaySettings(scale=0.5, offset_x=0.25),
         )
         result = render_snapshot(snapshot, side=128, montage_size=(128, 128))
+        with_light = render_snapshot(
+            replace(snapshot, display=replace(snapshot.display, lens_light=True)),
+            side=128,
+            montage_size=(128, 128),
+        )
         expected = place_layer(
-            result.lensed.rgb, result.lensed.alpha,
+            with_light.lensed.rgb, with_light.lensed.alpha,
             fit_background(snapshot.sky_rgb, 128, 128, "fill"),
             scale=0.5, x=0.25,
         )
         np.testing.assert_array_equal(result.montage, expected)
         self.assertGreater(np.count_nonzero(result.source.alpha), 0)
         np.testing.assert_array_equal(result.source.rgb, 0)
+
+    def test_lens_light_is_softened_whiter_and_fades_outward(self):
+        image = np.zeros((1, 3, 3), np.float32)
+        kappa = np.array([[1e6, 1, 0.01]], np.float32)
+        tinted = draw_lens_light(0.5, kappa, image, 3, 1)
+        center, middle, outside = tinted[0]
+        self.assertLess(center[0], 255)
+        self.assertLess(center[0] - center[2], 20)
+        self.assertGreater(center[0], middle[0])
+        self.assertGreater(middle[0], outside[0])
+        self.assertLess(outside[0] / 255, np.log10(1 + kappa[0, 2]))
 
     def test_current_input_and_lens_settings_affect_result_not_original(self):
         snapshot = self.snapshot()
@@ -89,6 +106,17 @@ class SceneTests(unittest.TestCase):
         self.assertFalse(np.array_equal(plain.lensed.rgb, overlaid.lensed.rgb))
         self.assertFalse(np.array_equal(plain.montage, overlaid.montage))
         self.assertFalse(snapshot.raw_bgr.flags.writeable)
+
+    def test_montage_lens_light_is_independent_of_diagnostic_toggle(self):
+        snapshot = self.snapshot()
+        without_toggle = render_snapshot(snapshot, side=128, montage_size=(128, 128))
+        with_toggle = render_snapshot(
+            replace(snapshot, display=replace(snapshot.display, lens_light=True)),
+            side=128,
+            montage_size=(128, 128),
+        )
+        np.testing.assert_array_equal(without_toggle.montage, with_toggle.montage)
+        self.assertFalse(np.array_equal(without_toggle.lensed.rgb, with_toggle.lensed.rgb))
 
     def test_empty_subject_and_invalid_configurations_fail(self):
         with self.assertRaisesRegex(ImageError, "No visible"):

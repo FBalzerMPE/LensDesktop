@@ -214,8 +214,12 @@ def remap_layer(
     return np.clip(color, 0, alpha[..., None] * 255), alpha
 
 
-def default_background_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "data" / "euclid_abell_2764_example.jpeg"
+def default_background_path(filename: str | None = None) -> Path:
+    if filename is None:
+        from .defaults import load_gui_defaults
+
+        filename = load_gui_defaults().background.image
+    return Path(__file__).resolve().parent.parent / "data" / filename
 
 
 def prepare_input(

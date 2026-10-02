@@ -31,9 +31,15 @@ class CameraIntegrationTests(unittest.TestCase):
         self.factory = lambda index: FakeCapture(opened=index in (0, 1))
         self.window = desktop.LensDesktop(camera_factory=self.create_capture)
         self.window.timer.stop()
+        panel = self.window.settings_panel
+        panel.configuration_enabled.setChecked(False)
+        self.window.dual_checkbox.setChecked(False)
+        self.window.critical_checkbox.setChecked(False)
+        self.window.lenslight_checkbox.setChecked(False)
         self.window.resize(650, 350)
         self.window.show()
         self.application.processEvents()
+        self.window.update_view()
 
     def create_capture(self, index):
         capture = self.factory(index)

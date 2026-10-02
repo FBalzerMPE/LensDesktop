@@ -50,11 +50,12 @@ class SettingsPanelTests(unittest.TestCase):
 
     def test_native_controls_and_existing_defaults(self):
         panel = self.window.settings_panel
-        for checkbox in (
-            panel.critical_checkbox,
-            panel.dual_checkbox,
-            panel.inverse_checkbox,
-            panel.lenslight_checkbox,
+        view_defaults = self.window.gui_defaults.view
+        for checkbox, expected in (
+            (panel.critical_checkbox, view_defaults.critical_curve),
+            (panel.dual_checkbox, view_defaults.dual_view),
+            (panel.inverse_checkbox, view_defaults.de_lensing),
+            (panel.lenslight_checkbox, view_defaults.lens_light),
         ):
             self.assertEqual(checkbox.styleSheet(), "")
             self.assertFalse(checkbox.font().bold())
@@ -62,7 +63,7 @@ class SettingsPanelTests(unittest.TestCase):
                 checkbox.width(), checkbox.minimumSizeHint().width()
             )
             self.assertTrue(checkbox.isVisible())
-            self.assertFalse(checkbox.isChecked())
+            self.assertEqual(checkbox.isChecked(), expected)
         for slider, value in (
             (panel.sliderb, 65),
             (panel.sliderq, 65),
@@ -75,6 +76,7 @@ class SettingsPanelTests(unittest.TestCase):
         self.assertFalse(panel.mask_controls.isVisible())
 
     def test_canvas_is_square_and_does_not_overlap_controls(self):
+        self.window.dual_checkbox.setChecked(False)
         self.assertEqual(self.window.base_w, self.window.base_h)
         self.assertEqual(self.window.label.width(), self.window.base_w)
         self.assertEqual(self.window.label.height(), self.window.base_h)

@@ -6,7 +6,10 @@
 
 This tool uses screen / camera recording to map images in (almost) real time to a lensed/delensed image.
 
-In order for the tool to apply to other windows you will need to give it the rights for screen / camera recording. I, therefore, recommend to use pyinstaller to create an ".app" file first. Once you have that you can give these rights to the app rather than the terminal (the latter might being a security concern). Your computer might close the app before you can give permission for those recordings, but you usually just have to restart it when that happens.
+In order for the tool to apply to other windows you will need to give it the rights for screen / camera recording.
+I, therefore, recommend to use pyinstaller to create an ".app" file first. 
+Once you have that you can give these rights to the app rather than the terminal (the latter might being a security concern).
+Your computer might close the app before you can give permission for those recordings, but you usually just have to restart it when that happens.
 
 I only used this Code on my Macbook where it ran in almost real time. I have not yet confirmed if it is supported by other platforms.
 If it does not work for those, but you found a fix, please let me know so that we can include it in upcoming versions!
@@ -56,6 +59,13 @@ pyinstaller --noconfirm LensDesktop.spec
 
 The first start after creating the app usually takes a bit longer.
 
+### GUI defaults
+
+User-facing startup and reset values are stored in [data/defaults.ini](data/defaults.ini),
+grouped by the settings-panel sections. Edit the file before starting Lens Desktop
+to change these defaults. A missing or invalid file is reported at startup rather
+than silently falling back to hard-coded values.
+
 ## Running on Windows for development
 
 Use Python 3.12 and a dedicated environment containing PyQt5. From PowerShell
@@ -82,12 +92,15 @@ The PyInstaller specification and icons remain at the repository root.
 
 View toggles and lens sliders are grouped in a settings panel beside the image.
 Related controls are grouped in keyboard-accessible expanders, with a restrained
-teal accent and rounded panels. Source, Source placement, View, and Print / export start open;
-Camera setup, Input / greenscreen, Source relative to lens, Sky background, and
-Lens start collapsed.
-Click a section header to expand/collapse it; values and enabled states are
-retained. Ctrl+F opens the required camera sections when selection is needed.
-The panel scrolls vertically when the window is short.
+teal accent and rounded panels. Sections appear in the order Source, Input /
+greenscreen, Sky background, Source placement, Source relative to lens, Lens,
+View, and Print / export. Expansion defaults are configured in
+`data/defaults.ini`. Click a section header to expand/collapse it; values and
+enabled states are retained. The reset icon at the right of a settings section
+restores that section's configured defaults; Source returns to Desktop and Sky
+background restores its bundled image. Print / export has no reset icon.
+Ctrl+F opens the required camera sections when selection is needed. The panel
+scrolls vertically when the window is short.
 Mask Radius is shown only in De-lensing mode.
 
 Window height is capped to the current screen's available height, including
@@ -129,10 +142,11 @@ In **Sky background**:
 - **Fill** preserves aspect ratio and crops the center to fill the canvas.
   **Fit** preserves the whole sky image and adds black margins.
 - In **Source placement**, the **Source size** slider scales the rendered source
-  from 10% to 200% of a panel, with a percentage readout. The default is **25%**.
+  from 10% to 200% of a panel, with a percentage readout. Its default is set in
+  `data/defaults.ini` (currently **50%**).
   **Horizontal offset** and **Vertical offset** shift it by a percentage of the
   panel width/height (positive values move right/down).
-- **Reset source placement** restores size 25% and zero offsets.
+- The **Source placement reset icon** restores the configured size and offsets.
 
 Placement is applied **after lensing**, including the source's curves/markers
 and optional lens-light overlay. It does not move the lens relative to the input,
@@ -140,18 +154,20 @@ recompute the lens maps, or lens the sky. In Dual view, the same placement and
 unchanged sky are used in both panels. Screenshots and sequences export the
 composed scene, without controls.
 
-The sky is decoded once and its fitted version is cached. The default 25% size
-leaves room to see the surrounding sky; increase the slider for a larger subject.
+The sky is decoded once and its fitted version is cached. The configured source
+size leaves room to see the surrounding sky; increase the slider for a larger subject.
 The webcam's own background remains opaque unless **Remove greenscreen** is
 enabled. Black subject pixels are not treated as transparency.
 
 ### Cross, Cusp, and Fold configurations
 
 Open **Source relative to lens** and enable **Place input before lensing**.
-This is opt-in: leaving it off preserves the existing rendering.
+Leaving it off preserves the existing rendering. Its initial enabled state and
+size are configured in `data/defaults.ini`.
 
 - **Input size** sets the longest visible source extent to 1-100% of the
-  Einstein radius, defaulting to **10%**. The visible-alpha bounding box is
+  Einstein radius. Its default is set in `data/defaults.ini` (currently **50%**).
+  The visible-alpha bounding box is
   trimmed and centered; without greenscreen removal, the whole image rectangle
   is the subject. Black pixels remain opaque.
 - **Cross** centers the subject inside the tangential caustic.
@@ -160,7 +176,8 @@ This is opt-in: leaving it off preserves the existing rendering.
 - **Fold** places it just inside a smooth caustic edge, bringing two images
   close together.
 - Preset positions follow axis ratio, core radius, position angle, and lens
-  mass. **Reset pre-lens setup** turns placement off and restores Cross / 10%.
+  mass. The **Source relative to lens reset icon** restores its configured
+  enabled state, size, and preset.
 
 These controls change the input **before lensing**. Input zoom still crops the
 original subject first; **Source placement** still scales/moves the resulting
@@ -282,10 +299,9 @@ subject colors matching the selected screen can also be removed.
   input axis, and **400%** keeps the central quarter. It ranges from 100-400%,
   keeps the canvas dimensions unchanged, and applies when the slider is released.
   The sky and lens maps do not zoom. Color and alpha use the same crop.
-- **Reset input settings** disables keying, restores the above key defaults,
-  source-default framing/mirroring, 100% input zoom and Composed scene preview. It retains the
-  source and lens/sky settings, restoring Fit for loaded photos and Fill for
-  frozen input.
+- The **Input / greenscreen reset icon** restores keying, framing/mirroring,
+  zoom, and preview settings from `data/defaults.ini`, without changing the
+  source or lens/sky settings.
 
 Only foreground color and alpha pass through lensing; the sky stays unchanged.
 Forward keyed interpolation uses premultiplied color and linear sampling to
@@ -310,8 +326,9 @@ the mask preview on your setup.
    greenscreen controls remain adjustable; a frozen input does not lock the UI.
 2. Configure the foreground, input zoom/mirroring, lens, optional Cross/Cusp/Fold
    placement, sky and post-lens source placement as desired.
-3. Turn off **De-lensing**. Open **Print / export** and select **Export A4 PDF...**,
-   or press **Ctrl+P**. Choose a PDF filename.
+3. Turn off **De-lensing**. Open **Print / export** and select **Export A4 PDF...**
+   or press **Ctrl+P** to save a PDF, or select **Print A4...** to choose a printer
+   and print directly.
 
 The exporter creates one **portrait A4 page**, with German headings and
 explanations, the MPE and Minerva logos beside the title, and a compact
@@ -328,8 +345,10 @@ five-panel layout of the earlier composition:
 
 The two curve types are deliberately shown in their respective planes rather
 than treated as the same physical coordinates. Diagnostic panels always include
-the curves; the montage follows the GUI's curve, marker and lens-light settings.
-Dual view and Source/Mask preview selection do not determine the PDF layout.
+the curves; the montage follows the GUI's curve and marker settings, and always
+includes the softened lens-light glow regardless of the GUI toggle. That toggle
+continues to control the lensed diagnostic panel. Dual view and Source/Mask
+preview selection do not determine the PDF layout.
 
 Export captures detached copies of the frozen pixels, sky and current settings
 before opening the save dialog. It re-renders the model at print resolution
@@ -357,8 +376,9 @@ license on the page. Retain these when distributing a montage. For a custom sky,
 the exporter identifies the filename and reminds you to check its rights; it
 cannot infer the owner's credit or license automatically.
 
-Open the PDF in a viewer and print on A4 at **actual size / 100%**. Direct printing
-from the application is not implemented.
+For a saved PDF, print on A4 at **actual size / 100%** in your PDF viewer. The
+**Print A4...** button opens the system printer dialog and sends the same page
+directly to the selected printer.
 
 ### Regression checks
 

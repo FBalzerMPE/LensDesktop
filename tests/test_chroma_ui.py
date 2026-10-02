@@ -55,6 +55,12 @@ class ChromaIntegrationTests(unittest.TestCase):
         self.window.show()
         self.application.processEvents()
         self.panel = self.window.settings_panel
+        self.panel.configuration_enabled.setChecked(False)
+        self.window.dual_checkbox.setChecked(False)
+        self.window.critical_checkbox.setChecked(False)
+        self.window.lenslight_checkbox.setChecked(False)
+        self.window._configuration_geometry_cache = None
+        self.window._configured_source_cache = None
         self.window.static_source.set_frame(np.full((32, 32, 3), (0, 255, 0), np.uint8))
         self.window._activate_static_source()
         self.window.background.clear()

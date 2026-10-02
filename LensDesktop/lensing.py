@@ -79,12 +79,26 @@ def lensing_curves(map_x, map_y, deflx, defly):
     return contours, caustics
 
 
+def _lens_light_strength(kappa):
+    return 0.6 * np.clip(np.log10(1 + kappa), 0, 1) ** 1.2
+
+
 def draw_lens_light(b, kappa, image, base_w, base_h):
     if b > 0:
-        alpha = np.clip(np.log10(1 + kappa), 0, 1)
-        for channel, value in enumerate((255, 200, 130)):
+        alpha = _lens_light_strength(kappa)
+        for channel, value in enumerate((255, 246, 232)):
             image[:, :, channel] = image[:, :, channel] * (1 - alpha) + value * alpha
     return image
+
+
+def apply_lens_light(b, kappa, image, coverage):
+    if b <= 0:
+        return image, coverage
+    height, width = image.shape[:2]
+    strength = _lens_light_strength(kappa)
+    image = draw_lens_light(b, kappa, image, width, height)
+    coverage = coverage * (1 - strength) + strength
+    return image, coverage
 
 
 def forward_layer(
@@ -102,10 +116,9 @@ def forward_layer(
     else:
         transformed, coverage = remap_layer(rgb, alpha, map_x, map_y)
     if lens_light and lens_radius > 0:
-        height, width = map_x.shape
-        transformed = draw_lens_light(lens_radius, kappa, transformed, width, height)
-        light = np.clip(np.log10(1 + kappa), 0, 1)
-        coverage = coverage * (1 - light) + light
+        transformed, coverage = apply_lens_light(
+            lens_radius, kappa, transformed, coverage
+        )
     return transformed, coverage
 
 

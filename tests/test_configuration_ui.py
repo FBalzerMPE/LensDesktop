@@ -30,6 +30,10 @@ class ConfigurationIntegrationTests(unittest.TestCase):
         return native
 
     def test_opt_in_exclusive_radios_size_and_separate_reset(self):
+        defaults = self.window.gui_defaults.configuration
+        self.panel.configuration_enabled.setChecked(False)
+        self.panel.configuration_size.setValue(10)
+        self.panel.configuration_buttons["cross"].setChecked(True)
         self.assertFalse(self.panel.configuration_enabled.isChecked())
         self.assertFalse(self.panel.configuration_size.isEnabled())
         self.assertEqual(self.panel.configuration_size.value(), 10)
@@ -42,15 +46,16 @@ class ConfigurationIntegrationTests(unittest.TestCase):
         self.assertEqual(self.panel.configuration_size_value.text(), "30%")
         post_placement = self.window._source_placement()
         self.panel.reset_configuration.click()
-        self.assertFalse(self.panel.configuration_enabled.isChecked())
-        self.assertEqual(self.panel.selected_configuration(), "cross")
-        self.assertEqual(self.panel.configuration_size.value(), 10)
+        self.assertEqual(self.panel.configuration_enabled.isChecked(), defaults.enabled)
+        self.assertEqual(self.panel.selected_configuration(), defaults.preset)
+        self.assertEqual(self.panel.configuration_size.value(), defaults.size)
         self.assertEqual(self.window._source_placement(), post_placement)
 
     def test_placement_changes_source_plane_not_sky_or_post_lens_settings(self):
         native = self.enable_subject()
         self.panel.source_scale.setValue(100)
         self.window.dual_checkbox.setChecked(True)
+        self.panel.configuration_size.setValue(10)
         post_placement = self.window._source_placement()
         sky = self.window.background.image.copy()
         rgb, alpha = self.window._keyed_input(self.window.static_source.snapshot())

@@ -4,7 +4,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .lensing import create_SIE_map, draw_forward_markers, forward_layer, lensing_curves, source_configuration_geometry
+from .lensing import apply_lens_light, create_SIE_map, draw_forward_markers, forward_layer, lensing_curves, source_configuration_geometry
 from .processing import ChromaKeySettings, ImageError, fit_background, fit_layer, foreground_bounds, place_layer, place_source, prepare_input
 
 
@@ -207,6 +207,8 @@ def render_snapshot(
     for contour in (*critical, *caustics):
         contour.setflags(write=False)
     color, coverage = lensed.rgb.copy(), lensed.alpha.copy()
+    if not display.lens_light:
+        color, coverage = apply_lens_light(lens.radius, kappa, color, coverage)
     if display.curves:
         cv2.drawContours(color, critical, -1, (255, 255, 255), 5)
         cv2.drawContours(color, critical, -1, (0, 0, 0), 2)

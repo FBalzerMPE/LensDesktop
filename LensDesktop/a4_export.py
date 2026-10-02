@@ -129,7 +129,7 @@ def paint_a4_page(
         settings.configuration.title() if settings.configuration else "Originalrahmung"
     )
     metadata = (
-        f"Normierte Modellwerte: {'SIE (Herzmodifikation)' if lens.heart else 'SIE'} | Einsteinradius $b = {lens.radius:.3f}$, "
+        f"Normierte Modellwerte: {'SIE (Herzmodifikation)' if lens.heart else 'SIE+Core'} | Einsteinradius b = {lens.radius:.3f}, "
         f"Achsenverhältnis q = {lens.axis_ratio:.2f}, Kernradius/b = {lens.core:.3f}, "
         f"Winkel = {np.degrees(lens.angle):.1f}° | Quelle: {configuration}"
         + (
@@ -139,7 +139,8 @@ def paint_a4_page(
         )
         + f"\nMontage: Größe {display.scale * 100:g}%, Versatz ({display.offset_x * 100:g}%, "
         f"{display.offset_y * 100:g}%), Himmel {display.sky_mode}; "
-        f"Linsenlicht {'an' if display.lens_light else 'aus'}, Kurven {'an' if display.curves else 'aus'}."
+        f"GUI-Linsenlicht {'an' if display.lens_light else 'aus'}, Montage-Linsenlicht an, "
+        f"Kurven {'an' if display.curves else 'aus'}."
     )
     text(rect(12, 35, 88, 6), "1. Deine Originalaufnahme", 10, bold=True, centered=True)
     text(
@@ -279,4 +280,22 @@ def write_a4_pdf(snapshot: SceneSnapshot, path: str | Path) -> RenderedScene:
         raise ImageError("Cannot finish writing the A4 PDF.")
     if not output.commit():
         raise ImageError(f"Cannot save A4 PDF: {output.errorString()}")
+    return scene
+
+
+def print_a4_snapshot(snapshot: SceneSnapshot, printer) -> RenderedScene:
+    if QtGui.QGuiApplication.instance() is None:
+        raise ImageError("A running Qt application is required for A4 printing.")
+    scene = render_snapshot(snapshot, side=PRINT_SIDE, montage_size=MONTAGE_SIZE)
+    painter = QtGui.QPainter()
+    if not painter.begin(printer):
+        raise ImageError("Cannot start the A4 printer painter.")
+    complete = False
+    try:
+        paint_a4_page(painter, snapshot, scene, printer.resolution())
+        complete = True
+    finally:
+        ended = painter.end()
+    if not complete or not ended:
+        raise ImageError("Cannot finish printing the A4 page.")
     return scene

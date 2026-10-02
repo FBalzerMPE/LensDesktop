@@ -57,6 +57,10 @@ class PolishedUiTests(unittest.TestCase):
         self.window.resize(750, 550)
         self.application.processEvents()
         self.panel = self.window.settings_panel
+        self.panel.configuration_enabled.setChecked(False)
+        self.window.dual_checkbox.setChecked(False)
+        self.window.critical_checkbox.setChecked(False)
+        self.window.lenslight_checkbox.setChecked(False)
 
     def tearDown(self):
         self.window.close()
@@ -64,15 +68,94 @@ class PolishedUiTests(unittest.TestCase):
         self.capture_patch.stop()
         self.exclusion_patch.stop()
 
-    def test_source_size_is_a_slider_with_25_percent_default_and_reset(self):
+    def test_source_size_slider_uses_ini_default_and_reset(self):
+        default_scale = self.window.gui_defaults.placement.scale
         self.assertIsInstance(self.panel.source_scale, desktop.QtWidgets.QSlider)
-        self.assertEqual(self.panel.source_scale.value(), 25)
-        self.assertEqual(self.panel.source_scale_value.text(), "25%")
+        self.assertEqual(self.panel.source_scale.value(), default_scale)
+        self.assertEqual(self.panel.source_scale_value.text(), f"{default_scale}%")
         self.panel.source_scale.setValue(65)
         self.assertEqual(self.panel.source_scale_value.text(), "65%")
         self.panel.reset_placement.click()
-        self.assertEqual(self.window._source_placement(), (0.25, 0, 0))
-        self.assertEqual(self.panel.source_scale_value.text(), "25%")
+        self.assertEqual(
+            self.window._source_placement(),
+            (
+                default_scale / 100,
+                self.window.gui_defaults.placement.offset_x / 100,
+                self.window.gui_defaults.placement.offset_y / 100,
+            ),
+        )
+        self.assertEqual(self.panel.source_scale_value.text(), f"{default_scale}%")
+
+    def test_sections_are_reordered_and_expose_reset_icons(self):
+        self.assertEqual(
+            [section.header.text() for section in self.panel.sections],
+            [
+                "Source",
+                "Input / greenscreen",
+                "Sky background",
+                "Source placement",
+                "Source relative to lens",
+                "Lens",
+                "View",
+                "Print / export",
+            ],
+        )
+        self.assertTrue(all(section.reset_button is not None for section in self.panel.sections[:-1]))
+        self.assertIsNone(self.panel.export_section.reset_button)
+
+    def test_settings_sections_reset_to_loaded_defaults(self):
+        defaults = self.window.gui_defaults
+        panel = self.panel
+
+        panel.background_mode.setCurrentIndex(panel.background_mode.findData("fit"))
+        with patch.object(self.window, "_load_background") as load_background:
+            panel.background_section.reset_button.click()
+        self.assertEqual(panel.background_mode.currentData(), defaults.background.fitting)
+        load_background.assert_called_once()
+        self.assertTrue(str(load_background.call_args.args[0]).endswith(defaults.background.image))
+
+        panel.camera_index.setValue(8)
+        self.window.selected_camera_index = 8
+        self.window.static_active = True
+        with patch.object(self.window, "update_view"):
+            panel.source_section.reset_button.click()
+        self.assertEqual(panel.camera_index.value(), defaults.source.camera_index)
+        self.assertIsNone(self.window.selected_camera_index)
+        self.assertFalse(self.window.static_active)
+
+        for checkbox, default in (
+            (panel.critical_checkbox, defaults.view.critical_curve),
+            (panel.dual_checkbox, defaults.view.dual_view),
+            (panel.inverse_checkbox, defaults.view.de_lensing),
+            (panel.lenslight_checkbox, defaults.view.lens_light),
+        ):
+            with desktop.QtCore.QSignalBlocker(checkbox):
+                checkbox.setChecked(not default)
+        self.window.heart = not defaults.lens.heart
+        for slider in (
+            panel.sliderb, panel.sliderq, panel.sliders, panel.slidert, panel.slider_mask,
+        ):
+            with desktop.QtCore.QSignalBlocker(slider):
+                slider.setValue(99)
+        with patch.object(self.window, "update_view"):
+            panel.view_section.reset_button.click()
+            panel.lens_section.reset_button.click()
+        self.assertEqual(panel.critical_checkbox.isChecked(), defaults.view.critical_curve)
+        self.assertEqual(panel.dual_checkbox.isChecked(), defaults.view.dual_view)
+        self.assertEqual(panel.inverse_checkbox.isChecked(), defaults.view.de_lensing)
+        self.assertEqual(panel.lenslight_checkbox.isChecked(), defaults.view.lens_light)
+        self.assertEqual(
+            [
+                panel.sliderb.value(), panel.sliderq.value(), panel.sliders.value(),
+                panel.slidert.value(), panel.slider_mask.value(),
+            ],
+            [
+                defaults.lens.einstein_radius, defaults.lens.axis_ratio,
+                defaults.lens.core_radius, defaults.lens.position_angle,
+                defaults.lens.mask_radius,
+            ],
+        )
+        self.assertEqual(self.window.heart, defaults.lens.heart)
 
     def test_expanders_preserve_enabled_state_and_values(self):
         section = self.panel.input_section

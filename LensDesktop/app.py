@@ -47,11 +47,12 @@ from functools import partial
 from pathlib import Path
 from scipy.interpolate import RegularGridInterpolator as interp
 from scipy.ndimage import zoom
-from .qt_compat import QT_PKG, QtWidgets, QtCore, QtGui
+from .qt_compat import QT_PKG, QtWidgets, QtCore, QtGui, QtPrintSupport
 from .controls import SettingsPanel
+from .defaults import DefaultsError, load_gui_defaults
 from . import lensing
 from .scene import SceneSnapshot, LensSettings, InputSettings, DisplaySettings, sky_attribution
-from .a4_export import write_a4_pdf
+from .a4_export import print_a4_snapshot, write_a4_pdf
 from .sources import CameraWorker, SourceError, StaticSource, normalize_bgr, frame_for_canvas
 from .processing import (
     ImageError, SkyBackground, default_background_path, example_source_path,
@@ -270,12 +271,13 @@ class LensDesktop(QtWidgets.QMainWindow):
         Define the sliders and the initial state of the application.
         """
         super().__init__()
+        self.gui_defaults = load_gui_defaults()
 
         self.setWindowTitle("Lens Desktop")
 
         self._ready = False
         self.gui_hidden = False
-        self.heart = False
+        self.heart = self.gui_defaults.lens.heart
         self.frame = True
         self.old_pos = None
         self._closing = False
@@ -322,7 +324,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.label.setGeometry(0, 0, self.base_w, self.base_h)
         self.label.installEventFilter(self)
         self.label.setToolTip("Drag to move the window. Right-click to toggle a marker.")
-        self.settings_panel = SettingsPanel()
+        self.settings_panel = SettingsPanel(self.gui_defaults)
         layout.addWidget(self.canvas, 1)
         layout.addWidget(self.settings_panel)
         self.setCentralWidget(central)
@@ -356,6 +358,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.freeze_input.clicked.connect(self._freeze_input)
         self.settings_panel.save_input.clicked.connect(self.save_input_image)
         self.settings_panel.export_a4.clicked.connect(self.export_a4_pdf)
+        self.settings_panel.print_a4.clicked.connect(self.print_a4)
         self.settings_panel.input_fitting.currentIndexChanged.connect(self.update_view)
         self._keyed_input_cache = None
         self._configuration_geometry_cache = None
@@ -366,6 +369,18 @@ class LensDesktop(QtWidgets.QMainWindow):
         for button in self.settings_panel.configuration_buttons.values():
             button.toggled.connect(lambda checked: self.update_view() if checked else None)
         self.settings_panel.reset_configuration.clicked.connect(self._reset_configuration)
+        self.settings_panel.source_section.reset_button.clicked.connect(
+            self._reset_source_settings
+        )
+        self.settings_panel.background_section.reset_button.clicked.connect(
+            self._reset_background_settings
+        )
+        self.settings_panel.view_section.reset_button.clicked.connect(
+            self._reset_view_settings
+        )
+        self.settings_panel.lens_section.reset_button.clicked.connect(
+            self._reset_lens_settings
+        )
         self.settings_panel.key_color.clicked.connect(self._choose_key_color)
         self.settings_panel.key_enabled.toggled.connect(self.update_view)
         self.settings_panel.input_zoom.valueChanged.connect(self.update_view)
@@ -400,16 +415,18 @@ class LensDesktop(QtWidgets.QMainWindow):
         interval_ms = int(1000 / refresh_rate_hz)
 
         self.sliderb.valueChanged.connect(self.update_b_value)
-        self.b_value = (65 - 40) / (99 - 40)
+        lens_defaults = self.gui_defaults.lens
+        self.b_value = (lens_defaults.einstein_radius - 40) / (99 - 40)
         self.sliderq.valueChanged.connect(self.update_q_value)
-        self.q_value = 0.65
+        self.q_value = lens_defaults.axis_ratio / 100
         self.sliders.valueChanged.connect(self.update_s_value)
-        self.s_value = (41 - 40) / (99 - 40.0)
+        self.s_value = (lens_defaults.core_radius - 40) / (99 - 40.0)
         self.slidert.valueChanged.connect(self.update_t_value)
-        self.t_value = (95 - 40) / (99 - 40) * np.pi
+        self.t_value = (lens_defaults.position_angle - 40) / (99 - 40) * np.pi
         self.slider_mask.valueChanged.connect(self.update_mask)
         self.mask_radius = (
-            (40 - 40) / (99 - 40) * np.sqrt(self.base_h**2 + self.base_w**2) / 2
+            (lens_defaults.mask_radius - 40) / (99 - 40)
+            * np.sqrt(self.base_h**2 + self.base_w**2) / 2
         )
 
         # Shortcuts for several features.
@@ -460,6 +477,8 @@ class LensDesktop(QtWidgets.QMainWindow):
             min(self.base_w + self.settings_panel.width(), available.width()),
             min(max(self.base_h, 360), self.maximumHeight()),
         )
+        if self.dual_checkbox.isChecked():
+            self.dual_view_toggled()
         self.timer.start(interval_ms)
 
     def _content_capture_rect_px(self):
@@ -584,6 +603,62 @@ class LensDesktop(QtWidgets.QMainWindow):
             and not self._camera_fault and not self._closing and not self._exporting_a4
         )
         self.settings_panel.export_a4.setEnabled(ready)
+        self.settings_panel.print_a4.setEnabled(ready)
+
+    def print_a4(self):
+        try:
+            snapshot = self.capture_print_snapshot()
+        except (ImageError, SourceError) as error:
+            self._a4_status(str(error), error=True)
+            return False
+        printer_mode = getattr(QtPrintSupport.QPrinter, "HighResolution", None)
+        if printer_mode is None:
+            printer_mode = QtPrintSupport.QPrinter.PrinterMode.HighResolution
+        printer = QtPrintSupport.QPrinter(printer_mode)
+        printer.setDocName("Der Gravitationslinseneffekt")
+        layout = QtGui.QPageLayout(
+            QtGui.QPageSize(QtGui.QPageSize.A4),
+            QtGui.QPageLayout.Portrait,
+            QtCore.QMarginsF(0, 0, 0, 0),
+        )
+        # A printer may not be selected until the print dialog opens.
+        printer.setPageLayout(layout)
+        dialog = QtPrintSupport.QPrintDialog(printer, self)
+        execute = getattr(dialog, "exec", None)
+        if execute is None:
+            execute = dialog.exec_
+        accepted = getattr(QtWidgets.QDialog, "Accepted", None)
+        if accepted is None:
+            accepted = QtWidgets.QDialog.DialogCode.Accepted
+        if execute() != accepted:
+            return False
+        if not printer.setPageLayout(layout):
+            self._a4_status("Cannot configure the selected printer for portrait A4.", error=True)
+            return False
+
+        self._exporting_a4 = True
+        timer_active = self.timer.isActive()
+        controls_enabled = self.settings_panel.isEnabled()
+        self.timer.stop()
+        self.settings_panel.setEnabled(False)
+        QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.WaitCursor))
+        self._a4_status("Rendering and printing the A4 page...")
+        self.settings_panel.export_status.repaint()
+        try:
+            scene = print_a4_snapshot(snapshot, printer)
+            notice = " Source-size warnings are included on the page." if scene.warnings else ""
+            self._a4_status(f"A4 page sent to the printer.{notice}")
+            return True
+        except (ImageError, cv2.error) as error:
+            self._a4_status(f"Cannot print A4 page: {error}", error=True)
+            return False
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+            self._exporting_a4 = False
+            self.settings_panel.setEnabled(controls_enabled)
+            self._sync_export_controls()
+            if timer_active and not self._closing:
+                self.timer.start()
 
     def capture_print_snapshot(self):
         if not self.static_active:
@@ -814,7 +889,10 @@ class LensDesktop(QtWidgets.QMainWindow):
             self._sync_source_selector()
             return False
         with QtCore.QSignalBlocker(self.settings_panel.input_fitting):
-            self.settings_panel.input_fitting.setCurrentIndex(0)
+            index = self.settings_panel.input_fitting.findData(
+                self.gui_defaults.input.loaded_image_fitting
+            )
+            self.settings_panel.input_fitting.setCurrentIndex(index)
         self._activate_static_source()
         return True
 
@@ -848,7 +926,10 @@ class LensDesktop(QtWidgets.QMainWindow):
             self._source_status(f"Cannot freeze input: {error}", error=True)
             return
         with QtCore.QSignalBlocker(self.settings_panel.input_fitting):
-            self.settings_panel.input_fitting.setCurrentIndex(1)
+            index = self.settings_panel.input_fitting.findData(
+                self.gui_defaults.input.frozen_input_fitting
+            )
+            self.settings_panel.input_fitting.setCurrentIndex(index)
         self._activate_static_source()
 
     def save_input_image(self):
@@ -913,7 +994,14 @@ class LensDesktop(QtWidgets.QMainWindow):
             self._load_background(path)
 
     def _default_background(self):
-        self._load_background(default_background_path())
+        self._load_background(default_background_path(self.gui_defaults.background.image))
+
+    def _reset_background_settings(self):
+        panel = self.settings_panel
+        index = panel.background_mode.findData(self.gui_defaults.background.fitting)
+        with QtCore.QSignalBlocker(panel.background_mode):
+            panel.background_mode.setCurrentIndex(index)
+        self._default_background()
 
     def _clear_background(self):
         self.background.clear()
@@ -928,16 +1016,25 @@ class LensDesktop(QtWidgets.QMainWindow):
             panel.source_offset_y.value() / 100,
         )
 
+    def _reset_source_settings(self):
+        panel = self.settings_panel
+        panel.camera_index.setValue(self.gui_defaults.source.camera_index)
+        with QtCore.QSignalBlocker(panel.camera_selector):
+            panel.camera_selector.setCurrentIndex(panel.camera_selector.findData(None))
+        self.selected_camera_index = None
+        self._use_desktop()
+
     def _reset_source_placement(self):
         panel = self.settings_panel
+        defaults = self.gui_defaults.placement
         with (
             QtCore.QSignalBlocker(panel.source_scale),
             QtCore.QSignalBlocker(panel.source_offset_x),
             QtCore.QSignalBlocker(panel.source_offset_y),
         ):
-            panel.source_scale.setValue(25)
-            panel.source_offset_x.setValue(0)
-            panel.source_offset_y.setValue(0)
+            panel.source_scale.setValue(defaults.scale)
+            panel.source_offset_x.setValue(defaults.offset_x)
+            panel.source_offset_y.setValue(defaults.offset_y)
         panel.update_percentage_labels()
         self.update_view()
 
@@ -955,27 +1052,37 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def _reset_input_settings(self):
         panel = self.settings_panel
-        defaults = ChromaKeySettings()
+        defaults = self.gui_defaults.input
+        key_defaults = defaults.key
         controls = (
             panel.key_enabled, panel.key_tolerance, panel.key_softness,
             panel.key_saturation, panel.key_spill, panel.input_frame_mode,
             panel.input_mirror, panel.input_preview, panel.input_fitting, panel.input_zoom,
         )
         blockers = [QtCore.QSignalBlocker(control) for control in controls]
-        panel.key_enabled.setChecked(defaults.enabled)
-        panel.key_color_rgb = defaults.color
+        panel.key_enabled.setChecked(key_defaults.enabled)
+        panel.key_color_rgb = key_defaults.color
         panel.update_key_color_label()
-        panel.key_tolerance.setValue(int(defaults.tolerance))
-        panel.key_softness.setValue(int(defaults.softness))
-        panel.key_saturation.setValue(int(defaults.saturation * 100))
-        panel.key_spill.setValue(int(defaults.spill * 100))
-        for control in (panel.input_frame_mode, panel.input_mirror, panel.input_preview):
-            control.setCurrentIndex(0)
-        panel.input_fitting.setCurrentIndex(0 if self.static_source.path is not None else 1)
-        panel.input_zoom.setValue(100)
+        panel.key_tolerance.setValue(int(key_defaults.tolerance))
+        panel.key_softness.setValue(int(key_defaults.softness))
+        panel.key_saturation.setValue(int(key_defaults.saturation * 100))
+        panel.key_spill.setValue(int(key_defaults.spill * 100))
+        for control, value in (
+            (panel.input_frame_mode, defaults.framing),
+            (panel.input_mirror, defaults.mirror),
+            (panel.input_preview, defaults.preview),
+        ):
+            control.setCurrentIndex(control.findData(value))
+        fitting = (
+            defaults.loaded_image_fitting
+            if self.static_source.path is not None
+            else defaults.frozen_input_fitting
+        )
+        panel.input_fitting.setCurrentIndex(panel.input_fitting.findData(fitting))
+        panel.input_zoom.setValue(defaults.zoom)
         del blockers
         panel.update_percentage_labels()
-        panel.set_key_controls_enabled(defaults.enabled)
+        panel.set_key_controls_enabled(key_defaults.enabled)
         self.update_view()
 
     def _input_framing(self):
@@ -1013,16 +1120,65 @@ class LensDesktop(QtWidgets.QMainWindow):
         elif panel.input_preview.currentData() != "scene":
             self._configuration_status("Calibration previews stay unplaced. Select Composed scene to see the configuration.")
 
+    def _reset_view_settings(self):
+        panel = self.settings_panel
+        defaults = self.gui_defaults.view
+        previous_dual_view = panel.dual_checkbox.isChecked()
+        controls = (
+            panel.critical_checkbox,
+            panel.dual_checkbox,
+            panel.inverse_checkbox,
+            panel.lenslight_checkbox,
+        )
+        blockers = [QtCore.QSignalBlocker(control) for control in controls]
+        panel.critical_checkbox.setChecked(defaults.critical_curve)
+        panel.dual_checkbox.setChecked(defaults.dual_view)
+        panel.inverse_checkbox.setChecked(defaults.de_lensing)
+        panel.lenslight_checkbox.setChecked(defaults.lens_light)
+        del blockers
+        panel.set_inverse_mode(defaults.de_lensing)
+        self.ellipses_image_plane.clear()
+        self.ellipses_source_plane.clear()
+        if previous_dual_view != defaults.dual_view:
+            self.dual_view_toggled()
+        self.update_view()
+
+    def _reset_lens_settings(self):
+        panel = self.settings_panel
+        defaults = self.gui_defaults.lens
+        controls = (
+            panel.sliderb,
+            panel.sliderq,
+            panel.sliders,
+            panel.slidert,
+            panel.slider_mask,
+        )
+        blockers = [QtCore.QSignalBlocker(control) for control in controls]
+        panel.sliderb.setValue(defaults.einstein_radius)
+        panel.sliderq.setValue(defaults.axis_ratio)
+        panel.sliders.setValue(defaults.core_radius)
+        panel.slidert.setValue(defaults.position_angle)
+        panel.slider_mask.setValue(defaults.mask_radius)
+        del blockers
+        self.heart = defaults.heart
+        self.b_value = (defaults.einstein_radius - 40) / (99 - 40)
+        self.q_value = defaults.axis_ratio / 100
+        self.s_value = (defaults.core_radius - 40) / (99 - 40)
+        self.t_value = (defaults.position_angle - 40) / (99 - 40) * np.pi
+        self.update_mask(defaults.mask_radius)
+        self.update_view()
+
     def _reset_configuration(self):
         panel = self.settings_panel
+        defaults = self.gui_defaults.configuration
         with (
             QtCore.QSignalBlocker(panel.configuration_enabled),
             QtCore.QSignalBlocker(panel.configuration_size),
             QtCore.QSignalBlocker(panel.configuration_buttons["cross"]),
         ):
-            panel.configuration_enabled.setChecked(False)
-            panel.configuration_size.setValue(10)
-            panel.configuration_buttons["cross"].setChecked(True)
+            panel.configuration_enabled.setChecked(defaults.enabled)
+            panel.configuration_size.setValue(defaults.size)
+            panel.configuration_buttons[defaults.preset].setChecked(True)
         self._configured_source_cache = None
         panel.update_percentage_labels()
         self.update_view()
@@ -1778,7 +1934,11 @@ class LensDesktop(QtWidgets.QMainWindow):
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
-    lens_desktop = LensDesktop()
+    try:
+        lens_desktop = LensDesktop()
+    except DefaultsError as error:
+        QtWidgets.QMessageBox.critical(None, "GUI configuration error", str(error))
+        return 1
     lens_desktop.show()
     return app.exec_()
 

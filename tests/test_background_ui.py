@@ -26,6 +26,11 @@ class BackgroundIntegrationTests(unittest.TestCase):
         self.exclusion_patch.start()
         self.window = desktop.LensDesktop()
         self.window.timer.stop()
+        panel = self.window.settings_panel
+        panel.configuration_enabled.setChecked(False)
+        self.window.dual_checkbox.setChecked(False)
+        self.window.critical_checkbox.setChecked(False)
+        self.window.lenslight_checkbox.setChecked(False)
         self.window.resize(650, 350)
         self.window.show()
         self.application.processEvents()
@@ -98,7 +103,11 @@ class BackgroundIntegrationTests(unittest.TestCase):
         panel.source_offset_x.setValue(-25)
         panel.source_offset_y.setValue(30)
         panel.reset_placement.click()
-        self.assertEqual(self.window._source_placement(), (0.25, 0.0, 0.0))
+        placement = self.window.gui_defaults.placement
+        self.assertEqual(
+            self.window._source_placement(),
+            (placement.scale / 100, placement.offset_x / 100, placement.offset_y / 100),
+        )
 
     def test_bad_load_and_cancel_preserve_last_valid_background(self):
         previous = self.window.background.image

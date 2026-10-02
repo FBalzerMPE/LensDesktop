@@ -33,16 +33,25 @@ class A4IntegrationTests(unittest.TestCase):
 
     def test_live_and_inverse_export_are_guarded_without_changing_modes(self):
         self.assertTrue(self.panel.export_a4.isEnabled())
+        self.assertTrue(self.panel.print_a4.isEnabled())
         self.window._use_desktop()
         self.assertFalse(self.panel.export_a4.isEnabled())
-        with patch.object(desktop.QtWidgets.QFileDialog, "getSaveFileName") as dialog:
+        self.assertFalse(self.panel.print_a4.isEnabled())
+        with (
+            patch.object(desktop.QtWidgets.QFileDialog, "getSaveFileName") as dialog,
+            patch.object(desktop.QtPrintSupport, "QPrintDialog") as print_dialog,
+        ):
             self.assertFalse(self.window.export_a4_pdf())
+            self.assertFalse(self.window.print_a4())
             dialog.assert_not_called()
+            print_dialog.assert_not_called()
         self.assertIn("Freeze", self.panel.export_status.text())
         self.window._activate_static_source()
         self.window.inverse_checkbox.setChecked(True)
         self.assertFalse(self.panel.export_a4.isEnabled())
+        self.assertFalse(self.panel.print_a4.isEnabled())
         self.assertFalse(self.window.export_a4_pdf())
+        self.assertFalse(self.window.print_a4())
         self.assertTrue(self.window.inverse_checkbox.isChecked())
         self.assertIn("forward", self.panel.export_status.text())
 
@@ -73,6 +82,51 @@ class A4IntegrationTests(unittest.TestCase):
         self.window.static_source.set_frame(np.zeros_like(native))
         np.testing.assert_array_equal(snapshot.raw_bgr, native)
         self.assertTrue(np.any(snapshot.sky_rgb))
+
+    def test_reset_buttons_use_the_loaded_gui_defaults(self):
+        panel = self.panel
+        original = self.window.gui_defaults
+        key = replace(original.input.key, enabled=True, tolerance=47)
+        self.window.gui_defaults = replace(
+            original,
+            input=replace(
+                original.input,
+                key=key,
+                framing="fit",
+                mirror="on",
+                preview="source",
+                zoom=135,
+                frozen_input_fitting="fill",
+            ),
+            configuration=replace(
+                original.configuration, size=32, preset="fold"
+            ),
+            placement=replace(
+                original.placement, scale=80, offset_x=15, offset_y=-20
+            ),
+        )
+        with patch.object(self.window, "update_view"):
+            panel.key_enabled.setChecked(False)
+            panel.key_tolerance.setValue(10)
+            panel.input_zoom.setValue(100)
+            self.window._reset_input_settings()
+            self.assertTrue(panel.key_enabled.isChecked())
+            self.assertEqual(panel.key_tolerance.value(), 47)
+            self.assertEqual(panel.input_frame_mode.currentData(), "fit")
+            self.assertEqual(panel.input_mirror.currentData(), "on")
+            self.assertEqual(panel.input_preview.currentData(), "source")
+            self.assertEqual(panel.input_zoom.value(), 135)
+
+            panel.configuration_size.setValue(10)
+            self.window._reset_configuration()
+            self.assertEqual(panel.configuration_size.value(), 32)
+            self.assertTrue(panel.configuration_buttons["fold"].isChecked())
+
+            panel.source_scale.setValue(25)
+            self.window._reset_source_placement()
+            self.assertEqual(
+                self.window._source_placement(), (0.8, 0.15, -0.2)
+            )
 
     def test_capture_is_independent_of_preview_and_dual_mode(self):
         self.set_subject()
@@ -132,6 +186,35 @@ class A4IntegrationTests(unittest.TestCase):
         ):
             self.assertFalse(self.window.export_a4_pdf())
             writer.assert_not_called()
+
+    def test_print_dialog_cancel_does_not_start_printing(self):
+        self.set_subject()
+        with (
+            patch.object(desktop.QtPrintSupport, "QPrintDialog") as dialog,
+            patch.object(desktop, "print_a4_snapshot") as printer,
+        ):
+            dialog.return_value.exec.return_value = desktop.QtWidgets.QDialog.Rejected
+            self.assertFalse(self.window.print_a4())
+            printer.assert_not_called()
+
+    def test_print_dialog_uses_the_captured_snapshot(self):
+        self.set_subject()
+        radius = self.window.b_value
+        with (
+            patch.object(desktop.QtPrintSupport, "QPrinter") as printer_class,
+            patch.object(desktop.QtPrintSupport, "QPrintDialog") as dialog,
+            patch.object(desktop, "print_a4_snapshot", return_value=SimpleNamespace(warnings=())) as printer,
+        ):
+            printer_class.HighResolution = object()
+            printer_class.return_value.setPageLayout.return_value = True
+            dialog.return_value.exec.return_value = desktop.QtWidgets.QDialog.Accepted
+            self.assertTrue(self.window.print_a4())
+        snapshot, selected_printer = printer.call_args.args
+        self.assertEqual(snapshot.lens.radius, radius)
+        self.assertIs(selected_printer, printer_class.return_value)
+        self.assertIs(dialog.call_args.args[0], selected_printer)
+        self.assertIn("sent to the printer", self.panel.export_status.text())
+        self.assertTrue(self.panel.print_a4.isEnabled())
 
     def test_export_uses_pre_dialog_snapshot_and_restores_timer_controls_on_failure(self):
         self.set_subject()
