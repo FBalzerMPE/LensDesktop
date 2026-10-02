@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-import LensDesktop as desktop
+from LensDesktop import app as desktop
 
 
 class SettingsPanelTests(unittest.TestCase):

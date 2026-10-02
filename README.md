@@ -64,7 +64,7 @@ in the repository folder:
 ```powershell
 & "C:\Python312\python.exe" -m venv .venv-qt5
 .\.venv-qt5\Scripts\python.exe -m pip install numpy scipy opencv-python PyQt5 mss
-.\.venv-qt5\Scripts\python.exe .\LensDesktop.py
+.\.venv-qt5\Scripts\python.exe -m LensDesktop
 ```
 
 Replace the first executable path with your installed Python 3.12 path if
@@ -72,6 +72,11 @@ different. Using that path directly avoids Conda environments shadowing the
 Windows `py` launcher. Do not install another Qt binding in this environment:
 the application's loader prefers PySide6, but the current application uses
 Qt5-specific APIs.
+
+The application modules live in the `LensDesktop` package. Run the command from
+the repository folder, not from inside the package. `LensDesktop/__main__.py`
+starts the application implemented in `LensDesktop/app.py`.
+The PyInstaller specification and icons remain at the repository root.
 
 ## Controls
 
@@ -96,7 +101,7 @@ test runner; no additional test dependency is needed:
 
 ```powershell
 $env:QT_QPA_PLATFORM = "offscreen"
-.\.venv-qt5\Scripts\python.exe -m unittest discover -s tests -p test_ui.py -v
+.\.venv-qt5\Scripts\python.exe -m unittest discover -s tests -v
 Remove-Item Env:QT_QPA_PLATFORM
 ```
 

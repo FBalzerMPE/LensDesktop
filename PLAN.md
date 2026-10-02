@@ -39,7 +39,7 @@ loading a sky photograph does not derive a mass distribution from that image.
 
 ## Current implementation and constraints
 
-- [LensDesktop.py](LensDesktop.py) contains the Qt window, capture logic,
+- [LensDesktop/app.py](LensDesktop/app.py) contains the Qt window, capture logic,
   transformations, controls, and export functions.
 - The four corner checkboxes use fixed geometry, bold fonts scaled from image
   size, and separate light-gray backgrounds. Sliders also use fixed geometry.
@@ -90,20 +90,32 @@ Keep the current entry point and extract only functionality needed by these
 features. These are proposed future files, not existing modules:
 
 ```text
-LensDesktop.py      Qt application integration, existing lens math and markers
-controls.py        Layout-managed settings panel and control signals
-qt_compat.py       Shared binding loader so application and panel use the same Qt
-sources.py         Desktop/webcam acquisition, camera selection and cleanup
-processing.py      Input normalization, framing, chroma key and composition
-scene.py           Scene result and detached export snapshot
-tests/test_ui.py   Focused panel, canvas, controls and image-export checks
+LensDesktop/
+    __init__.py    Package marker
+    __main__.py    Launcher for python -m LensDesktop
+    app.py         Qt application integration, existing lens math and markers
+    controls.py    Layout-managed settings panel and control signals
+    qt_compat.py   Shared binding loader so application and panel use the same Qt
+    sources.py     Planned: desktop/webcam acquisition, selection and cleanup
+    processing.py  Planned: input normalization, framing, keying and composition
+    scene.py       Planned: scene result and detached export snapshot
+tests/
+    test_ui.py          Panel, canvas, controls and image-export checks
+    test_entrypoint.py  Package and script launcher checks
 README.md          Setup, controls, layering and troubleshooting documentation
-LensDesktop.spec   Packaging adjustments only when needed
+LensDesktop.spec   Root-level packaging specification
 ```
 
 Do not extract all lens mathematics merely to reorganize the project. Keep pure
 processing helpers independent of Qt widgets so they can be exercised on sample
 arrays and reused for export.
+
+**Package preparation (2026-10-02):** Before Phase 2, the application modules
+were moved into the user-created `LensDesktop` package. The former
+`LensDesktop.py` is now `LensDesktop/app.py`; internal imports are relative.
+Run from the repository root with `python -m LensDesktop`. Tests and the
+PyInstaller specification use the package entry point. Documentation, tests,
+build configuration, and icons remain at the repository root.
 
 ## Implementation phases and tasks
 
@@ -124,9 +136,9 @@ Update mouse-coordinate mapping and desktop capture coordinates accordingly.
 Retain Ctrl+V presentation mode, including its existing frame toggle, and
 inverse-only mask controls. This is not a general resize-warning cleanup.
 
-- [x] T001 [Plan:1.1] Implement the layout-managed View and Lens groups in `controls.py`, reusing the current control labels and parameter ranges.
-- [x] T002 [Plan:1.2] Integrate the panel in `LensDesktop.py`; replace the corresponding absolute-position controls and adapt `HideGUI()` and `set_Geometry_sliders_and_labels()`.
-- [x] T003 [Plan:1.2] Adapt canvas sizing, `_content_capture_rect_px()`, and marker/drag event coordinates in `LensDesktop.py` so controls do not alter capture or marker placement.
+- [x] T001 [Plan:1.1] Implement the layout-managed View and Lens groups in `LensDesktop/controls.py`, reusing the current control labels and parameter ranges.
+- [x] T002 [Plan:1.2] Integrate the panel in `LensDesktop/app.py`; replace the corresponding absolute-position controls and adapt `HideGUI()` and `set_Geometry_sliders_and_labels()`.
+- [x] T003 [Plan:1.2] Adapt canvas sizing, `_content_capture_rect_px()`, and marker/drag event coordinates in `LensDesktop/app.py` so controls do not alter capture or marker placement.
 
 **Acceptance:** Checkbox labels and indicators are fully visible at Windows
 100%, 125%, and 150% display scaling, keyboard focus is visible, controls do not
@@ -141,7 +153,7 @@ A native Windows launch with live desktop capture also passes, with capture
 exclusion enabled. Python compilation and whitespace checks pass.
 Visual approval, native keyboard-focus appearance, and actual desktop alignment
 at each Windows display-scaling setting still need hands-on verification.
-The Qt loader was extracted to `qt_compat.py` without changing binding preference
+The Qt loader was extracted to `LensDesktop/qt_compat.py` without changing binding preference
 so both application and panel use the same binding. Rendering no longer resizes
 the window on every tick, as required to keep the panel outside the canvas.
 `README.md` documents this batch; T022 remains open for later feature docs.
@@ -170,10 +182,10 @@ Release captures on switching, failed probes, and application close. Ctrl+F
 toggles desktop and the selected camera, and uses the selector when no camera
 has been selected.
 
-- [ ] T004 [Plan:2.1] Implement source acquisition and capture lifecycle in `sources.py`, including BGRA-to-BGR desktop normalization and checked webcam reads.
-- [ ] T005 [Plan:2.2] Implement bounded camera discovery, manual index selection, refresh/cancel behavior, and resource release in `sources.py`.
-- [ ] T006 [Plan:2.2] Add source controls in `controls.py` and wire source transitions, notifications, Ctrl+F, and shutdown cleanup in `LensDesktop.py`.
-- [ ] T007 [Plan:2.1,2.2] Replace repeated capture branches in all four `LensDesktop.py` rendering methods with the common source boundary, preserving opaque rendering behavior.
+- [ ] T004 [Plan:2.1] Implement source acquisition and capture lifecycle in `LensDesktop/sources.py`, including BGRA-to-BGR desktop normalization and checked webcam reads.
+- [ ] T005 [Plan:2.2] Implement bounded camera discovery, manual index selection, refresh/cancel behavior, and resource release in `LensDesktop/sources.py`.
+- [ ] T006 [Plan:2.2] Add source controls in `LensDesktop/controls.py` and wire source transitions, notifications, Ctrl+F, and shutdown cleanup in `LensDesktop/app.py`.
+- [ ] T007 [Plan:2.1,2.2] Replace repeated capture branches in all four `LensDesktop/app.py` rendering methods with the common source boundary, preserving opaque rendering behavior.
 
 **Acceptance:** Desktop, an integrated webcam, and an external webcam can be
 selected where present. Busy/missing cameras and unplugging are reported without
@@ -194,8 +206,8 @@ Do not bundle or download a Euclid image automatically. Let the user provide an
 image they may use; retain optional attribution text for a future printed page.
 Scientific FITS images are outside the initial scope.
 
-- [ ] T008 [Plan:3.1] Implement image loading, normalized color data, and aspect-preserving background fitting/cache in `processing.py`.
-- [ ] T009 [Plan:3.1] Add sky-image controls in `controls.py` and integrate the selected background state and error messages in `LensDesktop.py`.
+- [ ] T008 [Plan:3.1] Implement image loading, normalized color data, and aspect-preserving background fitting/cache in `LensDesktop/processing.py`.
+- [ ] T009 [Plan:3.1] Add sky-image controls in `LensDesktop/controls.py` and integrate the selected background state and error messages in `LensDesktop/app.py`.
 
 **Acceptance:** A selected sky loads once, remains unchanged as lens parameters
 vary, and can be replaced or cleared. Transparent input pixels reveal the sky;
@@ -219,9 +231,9 @@ transparency from black pixel values. With keying disabled, use an opaque mask.
 Preview must distinguish the source, mask, and final composition without
 changing the lens parameters.
 
-- [ ] T010 [Plan:4.1,4.2] Implement framing, mirroring, configurable chroma keying, edge softness, and spill suppression in `processing.py`.
-- [ ] T011 [Plan:4.1] Add grouped input/key controls, preview selection, and Reset in `controls.py`; hide or disable irrelevant controls with an explanation.
-- [ ] T012 [Plan:4.2] Integrate input settings and preview handling in `LensDesktop.py`, keeping unmodified source frames separate from processed buffers.
+- [ ] T010 [Plan:4.1,4.2] Implement framing, mirroring, configurable chroma keying, edge softness, and spill suppression in `LensDesktop/processing.py`.
+- [ ] T011 [Plan:4.1] Add grouped input/key controls, preview selection, and Reset in `LensDesktop/controls.py`; hide or disable irrelevant controls with an explanation.
+- [ ] T012 [Plan:4.2] Integrate input settings and preview handling in `LensDesktop/app.py`, keeping unmodified source frames separate from processed buffers.
 
 **Acceptance:** A webcam subject retains visible colors, green areas become
 transparent, soft edges blend cleanly, and legitimate dark/black subject pixels
@@ -264,11 +276,11 @@ that result without control widgets. Snapshot arrays must be detached copies,
 not buffers that the next timer tick will mutate. Report file-write failures.
 Sequence capture restores parameters and render state even if export fails.
 
-- [ ] T013 [Plan:5.1] Implement transparent forward transformation/composition helpers in `processing.py`, reusing existing lens maps from `LensDesktop.py`.
-- [ ] T014 [Plan:5.2] Add an alpha-aware inverse reconstruction path alongside `inverse_remap_image()` in `LensDesktop.py`, preserving its legacy opaque path.
-- [ ] T015 [Plan:5.3] Define the scene result and detached snapshot structures in `scene.py`, including lens/input settings and optional sky attribution.
-- [ ] T016 [Plan:5.1,5.2] Wire the shared scene pipeline into the four rendering paths and overlays in `LensDesktop.py`, using one acquired frame per displayed scene.
-- [ ] T017 [Plan:5.3] Update `save_screenshot()` and `recording()` in `LensDesktop.py` to export the composed scene consistently and handle cancellation/write errors/state restoration.
+- [ ] T013 [Plan:5.1] Implement transparent forward transformation/composition helpers in `LensDesktop/processing.py`, reusing existing lens maps from `LensDesktop/app.py`.
+- [ ] T014 [Plan:5.2] Add an alpha-aware inverse reconstruction path alongside `inverse_remap_image()` in `LensDesktop/app.py`, preserving its legacy opaque path.
+- [ ] T015 [Plan:5.3] Define the scene result and detached snapshot structures in `LensDesktop/scene.py`, including lens/input settings and optional sky attribution.
+- [ ] T016 [Plan:5.1,5.2] Wire the shared scene pipeline into the four rendering paths and overlays in `LensDesktop/app.py`, using one acquired frame per displayed scene.
+- [ ] T017 [Plan:5.3] Update `save_screenshot()` and `recording()` in `LensDesktop/app.py` to export the composed scene consistently and handle cancellation/write errors/state restoration.
 
 **Acceptance:** At fixed canvas dimensions, changing lens parameters leaves
 background-only pixels identical to the fitted sky. Fully transparent
@@ -294,7 +306,7 @@ Qt PDF/printing facilities if suitable. Use physical A4 dimensions (210 x
 stretching a low-resolution preview. Exact resolution and page design remain
 undecided.
 
-- [ ] T018 [Plan:6.1] Confirm that `scene.py` snapshots provide independent images, settings, and attribution suitable for later high-resolution rendering.
+- [ ] T018 [Plan:6.1] Confirm that `LensDesktop/scene.py` snapshots provide independent images, settings, and attribution suitable for later high-resolution rendering.
 - [ ] T019 [Plan:6.2] After receiving page instructions, refine the export tasks in `PLAN.md`; only then implement the page renderer and any required Qt print integration.
 
 **Acceptance now:** Snapshot contents are usable independently of the live
@@ -325,8 +337,8 @@ source selection, keying workflow, static-sky semantics, shortcuts, attribution,
 and limitations. Verify packaging if the new modules affect the executable;
 do not claim untested Qt bindings or platforms are supported.
 
-- [ ] T020 [Plan:7.1] Perform the phase acceptance checks and final desktop/webcam/sky/keying/output matrix against `LensDesktop.py` and the extracted modules.
-- [ ] T021 [Plan:7.1] Measure and compare pipeline timings on Windows and resolve regressions caused by the changes in `sources.py`, `processing.py`, and `LensDesktop.py`.
+- [ ] T020 [Plan:7.1] Perform the phase acceptance checks and final desktop/webcam/sky/keying/output matrix against `LensDesktop/app.py` and the extracted modules.
+- [ ] T021 [Plan:7.1] Measure and compare pipeline timings on Windows and resolve regressions caused by the changes in `LensDesktop/sources.py`, `LensDesktop/processing.py`, and `LensDesktop/app.py`.
 - [ ] T022 [Plan:7.2] Update `README.md` with verified setup and feature instructions.
 - [ ] T023 [Plan:7.2] Check `LensDesktop.spec` module/resource inclusion and smoke-test a packaged Windows build when packaging dependencies are available.
 
@@ -342,12 +354,12 @@ Implementation evidence below names expected future outputs, not completed work.
 
 | Requirement | Plan items | Tasks | Implementation evidence |
 |---|---|---|---|
-| REQ-001 | 1.1, 1.2, 7.1 | T001-T003, T020 | `controls.py`; `LensDesktop.py` UI, visibility, canvas interaction |
-| REQ-002 | 2.1, 2.2, 7.1 | T004-T007, T020 | `sources.py`; source controls and capture lifecycle integration |
-| REQ-003 | 3.1, 7.1 | T008-T009, T020 | `processing.py` image loading/cache; sky controls |
-| REQ-004 | 4.1, 4.2, 7.1 | T010-T012, T020 | `processing.py` framing/keying; input controls and previews |
+| REQ-001 | 1.1, 1.2, 7.1 | T001-T003, T020 | `LensDesktop/controls.py`; `LensDesktop/app.py` UI, visibility, canvas interaction |
+| REQ-002 | 2.1, 2.2, 7.1 | T004-T007, T020 | `LensDesktop/sources.py`; source controls and capture lifecycle integration |
+| REQ-003 | 3.1, 7.1 | T008-T009, T020 | `LensDesktop/processing.py` image loading/cache; sky controls |
+| REQ-004 | 4.1, 4.2, 7.1 | T010-T012, T020 | `LensDesktop/processing.py` framing/keying; input controls and previews |
 | REQ-005 | 4.2, 5.1, 5.2, 5.3, 7.1 | T010, T012-T017, T020-T021 | Shared transparent scene pipeline; all view and image-export paths |
-| REQ-006 | 5.3, 6.1, 6.2, 7.1 | T015, T017-T020 | `scene.py` snapshots; later user-approved A4 export implementation |
+| REQ-006 | 5.3, 6.1, 6.2, 7.1 | T015, T017-T020 | `LensDesktop/scene.py` snapshots; later user-approved A4 export implementation |
 | REQ-007 | 1.1, 1.2, 2.1, 5.1, 5.2, 7.1, 7.2 | T001-T004, T007, T013-T014, T016, T020-T023 | Preserved opaque desktop behavior; `README.md`; verified packaging |
 
 ## Suggested delivery order

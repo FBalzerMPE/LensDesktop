@@ -44,8 +44,8 @@ import mss
 from functools import partial
 from scipy.interpolate import RegularGridInterpolator as interp
 from scipy.ndimage import zoom
-from qt_compat import QT_PKG, QtWidgets, QtCore, QtGui
-from controls import SettingsPanel
+from .qt_compat import QT_PKG, QtWidgets, QtCore, QtGui
+from .controls import SettingsPanel
 
 # Set window extent
 # base_w = 600
@@ -1139,8 +1139,12 @@ class LensDesktop(QtWidgets.QMainWindow):
         QtWidgets.QApplication.instance().quit()
 
 
-if __name__ == "__main__":
+def main():
     app = QtWidgets.QApplication(sys.argv)
     lens_desktop = LensDesktop()
     lens_desktop.show()
-    sys.exit(app.exec_())
+    return app.exec_()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

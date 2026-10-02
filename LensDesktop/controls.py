@@ -1,4 +1,4 @@
-from qt_compat import QtCore, QtWidgets
+from .qt_compat import QtCore, QtWidgets
 
 
 class SettingsPanel(QtWidgets.QScrollArea):

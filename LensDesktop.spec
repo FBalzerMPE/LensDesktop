@@ -12,8 +12,8 @@ for pkg in ('numpy','mss'):
     datas += d; binaries += b; hiddenimports += h
 
 a = Analysis(
-    ['LensDesktop.py'],
-    pathex=[],
+    [os.path.join(SPECPATH, 'LensDesktop', '__main__.py')],
+    pathex=[SPECPATH],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -27,7 +27,7 @@ a = Analysis(
 pyz = PYZ(a.pure)
 
 # Use an absolute path to avoid path confusion
-icon_path = os.path.abspath('icon.ico')
+icon_path = os.path.join(SPECPATH, 'icon.ico')
 
 exe = EXE(
     pyz,
@@ -63,7 +63,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
         name='LensDesktop.app',
-        icon='icon.icns',     # .icns for macOS
+        icon=os.path.join(SPECPATH, 'icon.icns'),     # .icns for macOS
         bundle_identifier='com.yourdomain.lensdesktop',
         info_plist={
             "NSCameraUsageDescription":
