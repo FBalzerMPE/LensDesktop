@@ -46,7 +46,7 @@ class A4PdfTests(unittest.TestCase):
         self.assertEqual(PRINT_DPI, 300)
         self.assertGreaterEqual(result.source.rgb.shape[0], 62 / 25.4 * PRINT_DPI)
         self.assertGreaterEqual(result.montage.shape[1], 186 / 25.4 * PRINT_DPI)
-        self.assertGreaterEqual(data.count(b"/Subtype /Image"), 5)
+        self.assertGreaterEqual(data.count(b"/Subtype /Image"), 7)
 
     def test_write_error_is_explicit_and_failed_render_preserves_existing_pdf(self):
         snapshot = self.snapshot()

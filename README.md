@@ -314,7 +314,10 @@ the mask preview on your setup.
    or press **Ctrl+P**. Choose a PDF filename.
 
 The exporter creates one **portrait A4 page**, with German headings and
-explanations, following the five-panel layout of the earlier composition:
+explanations, the MPE and Minerva logos beside the title, and a compact
+bottom-right box containing the model and montage settings. Sky credits and
+licensing information remain in the bottom-left footer. It follows the
+five-panel layout of the earlier composition:
 
 1. Original native photograph, without cropping, mirroring or greenscreen removal.
 2. Foreground after the current keying, input crop/framing and mirroring.
@@ -376,8 +379,8 @@ display scaling should also be checked on the target laptop.
 **Current A4 verification:** 21 targeted checks passed, including snapshot
 ownership, export guards, atomic failures, packaged resources and a keyed
 GUI-versus-print comparison. A native Windows hand-image PDF was generated and
-inspected for its single A4 page, German text/credits, five embedded images,
-print-resolution raster sizes and page bounds.
+inspected for its single A4 page, German text/credits, seven embedded images
+(including both header logos), print-resolution raster sizes and page bounds.
 
 **Open verification:** The latest full run executed 157 tests: 155 passed and
 two failed because the keying mock still targeted its former location and the

@@ -69,6 +69,22 @@ def paint_a4_page(
         painter.drawRect(target)
         return target
 
+    def logo(filename, box):
+        path = Path(__file__).resolve().parent.parent / "data" / filename
+        logo_image = QtGui.QImage(str(path))
+        if logo_image.isNull():
+            raise ImageError(f"Cannot load A4 header logo: {path}")
+        ratio = min(
+            box.width() / logo_image.width(), box.height() / logo_image.height()
+        )
+        target = QtCore.QRectF(
+            box.center().x() - logo_image.width() * ratio / 2,
+            box.center().y() - logo_image.height() * ratio / 2,
+            logo_image.width() * ratio,
+            logo_image.height() * ratio,
+        )
+        painter.drawImage(target, logo_image)
+
     def curves(target, contours, color, dashed=False):
         painter.save()
         painter.setClipRect(target)
@@ -92,15 +108,17 @@ def paint_a4_page(
     painter.setRenderHint(QtGui.QPainter.Antialiasing)
     painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
     painter.fillRect(rect(0, 0, *PAGE_SIZE_MM), QtCore.Qt.white)
+    logo("mpe_logo.png", rect(13, 8, 15, 15))
     text(
-        rect(12, 12, 186, 8),
+        rect(31, 12, 148, 8),
         "Der Gravitationslinseneffekt – Die Schwerkraft als Lupe",
         15,
         bold=True,
         centered=True,
     )
+    logo("mpe_minerva.png", rect(182, 8, 15, 15))
     text(
-        rect(12, 21, 186, 9),
+        rect(30, 21, 150, 9),
         "Wie sähe dein Licht aus, wenn es auf seinem Weg zu uns durch die Schwerkraft "
         "einer Galaxie abgelenkt würde?\nEine visuelle Demonstration.",
         9,
@@ -123,40 +141,39 @@ def paint_a4_page(
         f"{display.offset_y * 100:g}%), Himmel {display.sky_mode}; "
         f"Linsenlicht {'an' if display.lens_light else 'aus'}, Kurven {'an' if display.curves else 'aus'}."
     )
-    text(rect(12, 31, 186, 10), metadata, 7.5)
-    text(rect(12, 42, 88, 6), "1. Deine Originalaufnahme", 10, bold=True, centered=True)
+    text(rect(12, 35, 88, 6), "1. Deine Originalaufnahme", 10, bold=True, centered=True)
     text(
-        rect(110, 42, 88, 6),
+        rect(110, 35, 88, 6),
         "2. Freigestelltes Eingangsbild",
         10,
         bold=True,
         centered=True,
     )
-    image(scene.raw_rgb, rect(12, 49, 88, 58))
-    image(_checkerboard(scene.cleaned), rect(110, 49, 88, 58))
+    image(scene.raw_rgb, rect(12, 42, 88, 58))
+    image(_checkerboard(scene.cleaned), rect(110, 42, 88, 58))
     text(
-        rect(12, 108, 88, 9),
+        rect(12, 101, 88, 9),
         f"Originalbild ({scene.raw_rgb.shape[1]} × {scene.raw_rgb.shape[0]} pixel).",
         7,
     )
     key = settings.key
     color = "#{:02x}{:02x}{:02x}".format(*key.color)
     text(
-        rect(110, 108, 88, 9),
+        rect(110, 101, 88, 9),
         f"Farbe {color}, Zoom {settings.zoom:g}%, Spiegelung {'an' if settings.mirror else 'aus'}, "
-        f"Rahmung {settings.framing}. Schachbrett = transparent.",
+        f"Rahmung {settings.framing}.\nSchachbrett = transparent.",
         6.8,
     )
-    text(rect(12, 120, 88, 6), "3. Quelle und Kaustik", 10, bold=True, centered=True)
+    text(rect(12, 113, 88, 6), "3. Quelle und Kaustik", 10, bold=True, centered=True)
     text(
-        rect(110, 120, 88, 6),
+        rect(110, 113, 88, 6),
         "4. Linsenbild und kritische Kurve",
         10,
         bold=True,
         centered=True,
     )
-    source_rect = image(_checkerboard(scene.source), rect(12, 127, 88, 58))
-    lensed_rect = image(_checkerboard(scene.lensed), rect(110, 127, 88, 58))
+    source_rect = image(_checkerboard(scene.source), rect(12, 120, 88, 58))
+    lensed_rect = image(_checkerboard(scene.lensed), rect(110, 120, 88, 58))
     curves(source_rect, scene.caustic_curves, "#a02f47")
     curves(lensed_rect, scene.critical_curves, "#237679", dashed=True)
     x, y = scene.source_center
@@ -167,18 +184,13 @@ def paint_a4_page(
     painter.save()
     painter.setClipRect(source_rect)
     painter.setPen(QtGui.QPen(QtGui.QColor("#17252a"), 0.15 * unit))
-    marker = QtCore.QPointF(
-        center.x() + (2.5 if center.x() <= source_rect.center().x() else -2.5) * unit,
-        center.y() + (2.5 if center.y() <= source_rect.center().y() else -2.5) * unit,
-    )
-    painter.drawLine(center, marker)
     for direction in (-1, 1):
         painter.drawLine(
             QtCore.QPointF(
-                marker.x() - 0.35 * unit, marker.y() - direction * 0.35 * unit
+                center.x() - 0.35 * unit, center.y() - direction * 0.35 * unit
             ),
             QtCore.QPointF(
-                marker.x() + 0.35 * unit, marker.y() + direction * 0.35 * unit
+                center.x() + 0.35 * unit, center.y() + direction * 0.35 * unit
             ),
         )
     painter.restore()
@@ -188,9 +200,9 @@ def paint_a4_page(
     )
     if not scene.caustic_curves:
         source_caption += " Keine Kaustik im dargestellten Feld."
-    text(rect(12, 186, 88, 10), source_caption, 7)
+    text(rect(12, 179, 88, 10), source_caption, 7)
     text(
-        rect(110, 186, 88, 10),
+        rect(110, 179, 88, 10),
         (
             "Bildebene: Die kritische Kurve ist blau gestrichelt. Hier entstehen stark vergrößerte Bilder."
             if scene.critical_curves
@@ -199,13 +211,13 @@ def paint_a4_page(
         7,
     )
     text(
-        rect(12, 199, 186, 6),
+        rect(12, 192, 186, 6),
         "5. Montage vor dem ausgewählten Himmel",
         10,
         bold=True,
         centered=True,
     )
-    image(scene.montage, rect(12, 207, 186, 62))
+    image(scene.montage, rect(12, 200, 186, 61))
     attribution = snapshot.attribution
     footer = (
         f"{attribution.title} | Illustration: Die Modelllinse ist nicht aus diesem Himmelsbild abgeleitet. "
@@ -218,7 +230,12 @@ def paint_a4_page(
             else ""
         )
     )
-    text(rect(12, 271, 186, 14), footer, 6.8)
+    text(rect(12, 264, 109, 29), footer, 6)
+    metadata_box = rect(125, 264, 73, 29)
+    painter.setPen(QtGui.QPen(QtGui.QColor("#a5b4b5"), 0.2 * unit))
+    painter.setBrush(QtGui.QColor("#f3f6f5"))
+    painter.drawRoundedRect(metadata_box, 1.2 * unit, 1.2 * unit)
+    text(rect(128, 266, 67, 25), metadata, 6.2)
 
 
 def write_a4_pdf(snapshot: SceneSnapshot, path: str | Path) -> RenderedScene:
