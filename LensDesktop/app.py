@@ -13,6 +13,7 @@ Einstein Radius : Einstein Radius of the mass profile.
 You can use the following shortcuts:
 
 Ctrl+S : To Save the currently shown screen (without the GUI printed on top of it).
+Ctrl+P : To export a German A4 PDF from a frozen/static input.
 Ctrl+F : To switch desktop/webcam input or reveal camera controls.
 Ctrl+R : To Save a sequence of images in which the Einstein radius increases up
          to its current value (this allows to create nice gifs, e.g. using ffmpeg to postprocess the images).
@@ -48,12 +49,15 @@ from scipy.interpolate import RegularGridInterpolator as interp
 from scipy.ndimage import zoom
 from .qt_compat import QT_PKG, QtWidgets, QtCore, QtGui
 from .controls import SettingsPanel
+from . import lensing
+from .scene import SceneSnapshot, LensSettings, InputSettings, DisplaySettings, sky_attribution
+from .a4_export import write_a4_pdf
 from .sources import CameraWorker, SourceError, StaticSource, normalize_bgr, frame_for_canvas
 from .processing import (
     ImageError, SkyBackground, default_background_path, example_source_path,
     place_layer, unplace_point, write_image_bgr,
-    ChromaKeySettings, chroma_key, fit_layer, remap_layer,
-    CausticGeometry, caustic_geometry, place_source,
+    ChromaKeySettings, chroma_key, fit_layer,
+    place_source, prepare_input,
 )
 
 # Set window extent
@@ -98,49 +102,18 @@ def heart_shape(x, y):
     height : numpy.array
         The height of the filter that generates the heart shape of the easteregg
     """
-    z = 0.5 * x**2 + (-1.2 * y + 0.35 - np.sqrt(abs(x * 0.75))) ** 2
-    height = 1 / (1 + np.exp(5 * (z - 0.3)))
-    return height
+    return lensing.heart_shape(x, y)
 
 
 eps = 1e-5
 
 
 def SIE_defl(xx, yy, t, s, heart, q, b):
-    ct, st = np.cos(t), np.sin(t)
-    xv, yv = ct * xx - st * yy, st * xx + ct * yy
-    r = np.sqrt(q * q * (xv * xv + s * s) + yv * yv)
-    if b == 0:
-        return np.zeros_like(xx), np.zeros_like(yy), r
-    fac = 1.0
-    if heart:
-        fac = heart_shape(xv, yv)
-    A = b * q / np.sqrt(1 - q * q)
-    deflx = A * np.arctan(np.sqrt(1 - q * q) * xv / (r + s)) * fac
-    defly = A * np.arctanh(np.sqrt(1 - q * q) * yv / (r + q * q * s)) * fac
-    deflxv = ct * deflx + st * defly
-    deflyv = -st * deflx + ct * defly
-    return deflxv, deflyv, r
+    return lensing.SIE_defl(xx, yy, t, s, heart, q, b)
 
 
 def source_configuration_geometry(q, core, angle, heart=False):
-    if not np.isfinite((q, core, angle)).all() or not 0 < q < 1 or not 0 <= core <= 1:
-        raise ImageError("Source configurations require finite, valid lens parameters.")
-    if heart:
-        raise ImageError("Cross/Cusp/Fold presets require the standard lens, not heart mode.")
-    if q >= 0.97:
-        raise ImageError("The lens is nearly circular. Lower the axis ratio below 0.97 for distinct presets.")
-    axis = np.linspace(-2.5, 2.5, 768)
-    xx, yy = np.meshgrid(axis, axis)
-    alpha_x, alpha_y, _ = SIE_defl(xx, yy, 0, core, False, q, 1 / np.sqrt(q))
-    geometry = caustic_geometry(xx - alpha_x, yy - alpha_y, axis[1] - axis[0])
-    rotation = np.array([[np.cos(angle), np.sin(angle)], [-np.sin(angle), np.cos(angle)]])
-    curve = geometry.curve @ rotation.T
-    curve.setflags(write=False)
-    cusp, fold = rotation @ geometry.cusp, rotation @ geometry.fold
-    return CausticGeometry(
-        curve, (float(cusp[0]), float(cusp[1])), (float(fold[0]), float(fold[1])),
-    )
+    return lensing.source_configuration_geometry(q, core, angle, heart)
 
 
 def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False):
@@ -165,27 +138,7 @@ def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False):
     xx, yy : int
         The original positions of the grid on the image plane.
     """
-    Lx = 2 * width / max(width, height)
-    Ly = 2 * height / max(width, height)
-    x = np.linspace(-1, 1, width) * Lx / 2
-    y = np.linspace(-1, 1, height) * Ly / 2
-    xx, yy = np.meshgrid(x, y)
-    deflxv, deflyv, r = SIE_defl(xx, yy, t, s, heart, q, b)
-    xv_new = xx - deflxv
-    yv_new = yy - deflyv
-    map_x = ((xv_new + Lx / 2) * (width - 1)).astype(np.float32)
-    map_y = ((yv_new + Ly / 2) * (height - 1)).astype(np.float32)
-    kappa = 0.5 * b / (1e-30 + r * r / q / q)
-    # in the future one could also add the easteregg heartshape to this
-    return (
-        map_x,
-        map_y,
-        deflxv,
-        deflyv,
-        xx.astype(np.float32),
-        yy.astype(np.float32),
-        kappa,
-    )
+    return lensing.create_SIE_map(width, height, b, q, s, t, heart)
 
 
 def inverse_remap_image(
@@ -266,19 +219,7 @@ def inverse_remap_image(
 
 
 def draw_lens_light(b, kappa, SIE_map_rgb, base_w, base_h):
-    # A pseudo lens light distribution. I could have picked a Sersic profile, but this seemed simpler and more directly related to the mass distribution.
-    if b > 0:
-        img2 = np.zeros((base_h, base_w, 3))
-        img2[:, :, 0] = 255
-        img2[:, :, 1] = 200
-        img2[:, :, 2] = 130
-        lkappa = np.log10(1 + kappa)
-        alpha = np.clip(lkappa, 0, 1)
-        for i in range(3):
-            SIE_map_rgb[:, :, i] = (
-                SIE_map_rgb[:, :, i] * (1 - alpha) + img2[:, :, i] * alpha
-            )
-    return SIE_map_rgb
+    return lensing.draw_lens_light(b, kappa, SIE_map_rgb, base_w, base_h)
 
 
 # -------------------------
@@ -362,6 +303,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.background = SkyBackground()
         self.static_source = StaticSource()
         self.static_active = False
+        self._exporting_a4 = False
 
         self.setWindowFlags(QtCore.Qt.Window)
         central = QtWidgets.QWidget()
@@ -413,6 +355,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.load_input_example.clicked.connect(self._load_input_example)
         self.settings_panel.freeze_input.clicked.connect(self._freeze_input)
         self.settings_panel.save_input.clicked.connect(self.save_input_image)
+        self.settings_panel.export_a4.clicked.connect(self.export_a4_pdf)
         self.settings_panel.input_fitting.currentIndexChanged.connect(self.update_view)
         self._keyed_input_cache = None
         self._configuration_geometry_cache = None
@@ -474,6 +417,8 @@ class LensDesktop(QtWidgets.QMainWindow):
         # Create shortcut 1: Save Screenshot
         save_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+S"), self)
         save_shortcut.activated.connect(self.save_screenshot)
+        print_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+P"), self)
+        print_shortcut.activated.connect(self.export_a4_pdf)
 
         # Create shortcut 2: Valentines day Easteregg
         save_shortcut2 = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+L"), self)
@@ -631,6 +576,93 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.input_fitting.setVisible(self.static_active)
         self.settings_panel.freeze_input.setEnabled(not self.static_active and not self._camera_fault)
         self.settings_panel.save_input.setEnabled(not self._camera_fault)
+        self._sync_export_controls()
+
+    def _sync_export_controls(self):
+        ready = (
+            self.static_active and not self.inverse_checkbox.isChecked()
+            and not self._camera_fault and not self._closing and not self._exporting_a4
+        )
+        self.settings_panel.export_a4.setEnabled(ready)
+
+    def capture_print_snapshot(self):
+        if not self.static_active:
+            raise ImageError("Freeze input or load a static image before exporting A4.")
+        if self.inverse_checkbox.isChecked():
+            raise ImageError("A4 export requires forward lensing. Turn off De-lensing first.")
+        if self._camera_fault or self._closing or self._exporting_a4:
+            raise ImageError("The source is unavailable or an A4 export is already running.")
+        panel = self.settings_panel
+        mode, mirror = self._input_framing()
+        scale, x, y = self._source_placement()
+        return SceneSnapshot(
+            self.static_source.snapshot(), self.background.image,
+            LensSettings(self.b_value, self.q_value, self.s_value, self.t_value, self.heart),
+            InputSettings(
+                panel.chroma_settings(), mode, mirror, panel.input_zoom.value(),
+                panel.selected_configuration() if panel.configuration_enabled.isChecked() else None,
+                panel.configuration_size.value(),
+            ),
+            DisplaySettings(
+                scale, x, y, panel.background_mode.currentData(),
+                self.lenslight_checkbox.isChecked(), self.critical_checkbox.isChecked(),
+                tuple((x / self.base_w, y / self.base_h) for x, y in self.ellipses_image_plane),
+                tuple((x / self.base_w, y / self.base_h) for x, y in self.ellipses_source_plane),
+                ps / self.base_w,
+            ),
+            self.static_source.path.name if self.static_source.path else "Eingefrorene Aufnahme",
+            sky_attribution(self.background.path),
+        )
+
+    def _a4_status(self, message, *, error=False):
+        self.settings_panel.export_status.setText(message)
+        self._source_status(message, error=error)
+
+    def export_a4_pdf(self):
+        try:
+            snapshot = self.capture_print_snapshot()
+        except (ImageError, SourceError) as error:
+            self._a4_status(str(error), error=True)
+            return False
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export A4 PDF", "lensing_demo.pdf", "PDF Files (*.pdf)",
+        )
+        if not filename:
+            return False
+        path = Path(filename)
+        if not path.suffix:
+            path = path.with_suffix(".pdf")
+            if path.exists() and QtWidgets.QMessageBox.question(
+                self, "Replace PDF?", f"{path.name} already exists. Replace it?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No,
+            ) != QtWidgets.QMessageBox.Yes:
+                return False
+        elif path.suffix.lower() != ".pdf":
+            self._a4_status("Choose a filename ending in .pdf.", error=True)
+            return False
+        self._exporting_a4 = True
+        timer_active = self.timer.isActive()
+        controls_enabled = self.settings_panel.isEnabled()
+        self.timer.stop()
+        self.settings_panel.setEnabled(False)
+        QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.WaitCursor))
+        self._a4_status("Rendering a print-resolution A4 PDF...")
+        self.settings_panel.export_status.repaint()
+        try:
+            scene = write_a4_pdf(snapshot, path)
+            notice = " Source-size warnings are included on the page." if scene.warnings else ""
+            self._a4_status(f"A4 PDF saved to {path}.{notice}")
+            return True
+        except (ImageError, cv2.error) as error:
+            self._a4_status(f"Cannot export A4 PDF: {error}", error=True)
+            return False
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+            self._exporting_a4 = False
+            self.settings_panel.setEnabled(controls_enabled)
+            self._sync_export_controls()
+            if timer_active and not self._closing:
+                self.timer.start()
 
     def _source_changed(self):
         source = self.settings_panel.source_selector.currentData()
@@ -1050,9 +1082,8 @@ class LensDesktop(QtWidgets.QMainWindow):
         configuration = (settings, mode, mirror, zoom, self.base_w, self.base_h)
         cached = self._keyed_input_cache
         if not self.static_active or cached is None or cached[0] is not frame or cached[1] != configuration:
-            rgb, alpha = chroma_key(frame, settings)
-            rgb, alpha = fit_layer(
-                rgb, alpha, self.base_w * 2, self.base_h * 2, mode, mirror=mirror, zoom=zoom,
+            rgb, alpha = prepare_input(
+                frame, settings, self.base_w * 2, self.base_h * 2, mode, mirror=mirror, zoom=zoom,
             )
             if self.static_active:
                 rgb.setflags(write=False)
@@ -1106,15 +1137,11 @@ class LensDesktop(QtWidgets.QMainWindow):
             source, source_alpha = fit_layer(rgb, alpha, self.base_w, self.base_h, "stretch")
             Lx = 2 * self.base_w / max(self.base_w, self.base_h)
             Ly = 2 * self.base_h / max(self.base_w, self.base_h)
-            transformed, transformed_alpha = remap_layer(
+            transformed, transformed_alpha = lensing.forward_layer(
                 rgb, alpha, self.map_x * 2 / Lx, self.map_y * 2 / Ly,
+                opaque=False, sky_present=self.background.image is not None,
+                lens_radius=self.b_value, kappa=self.kappa, lens_light=self.lenslight_checkbox.isChecked(),
             )
-            if self.lenslight_checkbox.isChecked() and self.b_value > 0:
-                transformed = draw_lens_light(
-                    self.b_value, self.kappa, transformed, self.base_w, self.base_h,
-                )
-                light_alpha = np.clip(np.log10(1 + self.kappa), 0, 1)
-                transformed_alpha = transformed_alpha * (1 - light_alpha) + light_alpha
             if self.critical_checkbox.isChecked():
                 contours = self.get_critical(transformed, transformed_alpha)
                 self.get_caustics(source, contours, source_alpha)
@@ -1135,27 +1162,11 @@ class LensDesktop(QtWidgets.QMainWindow):
         Ly = 2 * self.base_h / max(self.base_w, self.base_h)
         map_x = self.map_x * 2 / Lx
         map_y = self.map_y * 2 / Ly
-        color = cv2.remap(
-            img_bgr, map_x, map_y, interpolation=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT,
+        return lensing.forward_layer(
+            cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), np.ones(img_bgr.shape[:2], np.float32),
+            map_x, map_y, opaque=True, sky_present=self.background.image is not None,
+            lens_radius=self.b_value, kappa=self.kappa, lens_light=self.lenslight_checkbox.isChecked(),
         )
-        if self.background.image is None:
-            alpha = np.ones((self.base_h, self.base_w), np.float32)
-        else:
-            alpha = cv2.remap(
-                np.ones(img_bgr.shape[:2], np.float32), map_x, map_y,
-                interpolation=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT,
-            )
-            alpha = np.clip(alpha, 0, 1)
-        rgb = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
-        if self.lenslight_checkbox.isChecked():
-            rgb = draw_lens_light(
-                self.b_value, self.kappa, rgb, base_w=self.base_w, base_h=self.base_h
-            )
-            if self.b_value > 0:
-                light_alpha = np.clip(np.log10(1 + self.kappa), 0, 1)
-                alpha = alpha * (1 - light_alpha) + light_alpha
-        return rgb, alpha
 
     def _inverse_layer(self, rgb):
         if self.background.image is None:
@@ -1195,45 +1206,9 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.x_idx = np.clip(x_idx, 0, len(x_bins) - 2)
         self.y_idx = np.clip(y_idx, 0, len(y_bins) - 2)
 
-        # Save contours for critical curves
-        dx = 2.0 / (self.base_w - 1)
-        dy = 2.0 / (self.base_h - 1)
-        d_deflx_dx, d_deflx_dy = (
-            np.gradient(self.map_x, axis=1) / dx,
-            np.gradient(self.map_x, axis=0) / dy,
+        self.contours, self.caustic_curves = lensing.lensing_curves(
+            self.map_x, self.map_y, self.deflxv, self.deflyv,
         )
-        d_defly_dx, d_defly_dy = (
-            np.gradient(self.map_y, axis=1) / dx,
-            np.gradient(self.map_y, axis=0) / dy,
-        )
-        det = d_deflx_dx * d_defly_dy - d_deflx_dy * d_defly_dx
-        crit_mask = np.sign(det) < 0
-        self.contours, _ = cv2.findContours(
-            crit_mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE
-        )
-
-        # Save critical curves that go along
-        caustic_contours = []
-        for cnt in self.contours:
-
-            if len(cnt) < 2:
-                continue
-
-            cnt_caustic = cnt.astype(np.float32, copy=False)
-            for i in range(len(cnt_caustic)):
-                x_idx = cnt_caustic[i, 0, 0]
-                y_idx = cnt_caustic[i, 0, 1]
-                norm_x_lensed = -Lx / 2 + Lx * x_idx / (self.base_w - 1)
-                norm_y_lensed = -Ly / 2 + Ly * y_idx / (self.base_h - 1)
-                ix = np.clip(int(round(y_idx)), 0, self.base_h - 1)
-                jx = np.clip(int(round(x_idx)), 0, self.base_w - 1)
-                source_norm_x = norm_x_lensed - self.deflxv[ix, jx]
-                source_norm_y = norm_y_lensed - self.deflyv[ix, jx]
-                cnt_caustic[i, 0, 0] = (source_norm_x + Lx / 2) / Lx * (self.base_w - 1)
-                cnt_caustic[i, 0, 1] = (source_norm_y + Ly / 2) / Ly * (self.base_h - 1)
-            caustic_contours.append(cnt_caustic.astype(np.int32, copy=False))
-
-        self.caustic_curves = caustic_contours
 
     def dual_view_toggled(self):
         if not self.isMaximized():
@@ -1440,6 +1415,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         gc.collect()
         self.set_Geometry_sliders_and_labels()
         self._sync_configuration_controls()
+        self._sync_export_controls()
         if self._camera_fault or self._closing:
             return False
         try:
@@ -1497,51 +1473,10 @@ class LensDesktop(QtWidgets.QMainWindow):
     # Forward Updates
 
     def show_ps(self, img_bgr, alpha=None):
-        if len(self.ellipses_image_plane) > 0 or len(self.ellipses_source_plane) > 0:
-
-            if len(self.ellipses_image_plane) > 0:
-                x0 = self.ellipses_image_plane[0][0]
-                y0 = self.ellipses_image_plane[0][1]
-
-                x_source = int(
-                    interp(
-                        (np.arange(self.base_w), np.arange(self.base_h)),
-                        self.map_x.T,
-                        method="linear",
-                        bounds_error=False,
-                        fill_value=None,
-                    )(np.array([[x0, y0]]))[0]
-                )
-                y_source = int(
-                    interp(
-                        (np.arange(self.base_w), np.arange(self.base_h)),
-                        self.map_y.T,
-                        method="linear",
-                        bounds_error=False,
-                        fill_value=None,
-                    )(np.array([[x0, y0]]))[0]
-                )
-
-            if len(self.ellipses_source_plane) > 0:
-                x_source = int(2 * (self.ellipses_source_plane[0][0]))
-                y_source = int(2 * (self.ellipses_source_plane[0][1]))
-
-            for c in range(3):
-                cc = np.zeros((3,))
-                cc[c] = 255
-                color = (int(cc[0]), int(cc[1]), int(cc[2]))
-                cv2.ellipse(
-                    img_bgr,
-                    (x_source, y_source),  # center
-                    (ps, ps),  # axes
-                    0,  # angle
-                    0 + c * 120,  # startAngle
-                    120 + c * 120,  # endAngle
-                    color,  # color
-                    -1,  # thickness
-                )
-            if alpha is not None:
-                cv2.ellipse(alpha, (x_source, y_source), (ps, ps), 0, 0, 360, 1.0, -1)
+        lensing.draw_forward_markers(
+            img_bgr, alpha, self.map_x, self.map_y,
+            self.ellipses_image_plane, self.ellipses_source_plane, ps,
+        )
 
     def update_single_view(self, img_bgr):
 

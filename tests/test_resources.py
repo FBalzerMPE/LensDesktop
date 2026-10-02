@@ -22,6 +22,7 @@ class ResourceTests(unittest.TestCase):
         exec(compile(ast.Module(body=[assignment], type_ignores=[]), "LensDesktop.spec", "exec"), namespace)
         paths = namespace["datas"]
         self.assertIn((str(root / "data" / "euclid_patch_example.jpg"), "data"), paths)
+        self.assertIn((str(root / "data" / "euclid_abell_2764_example.jpeg"), "data"), paths)
         self.assertIn((str(root / "data" / "README.md"), "data"), paths)
         self.assertIn((str(root / "data" / "example_gs_pic.jpeg"), "data"), paths)
         self.assertTrue(all(Path(path).is_file() for path, _ in paths))
@@ -31,12 +32,12 @@ class ResourceTests(unittest.TestCase):
             root = Path(directory) / "_internal"
             data = root / "data"
             data.mkdir(parents=True)
-            shutil.copy2(processing.default_background_path(), data / "euclid_patch_example.jpg")
+            shutil.copy2(processing.default_background_path(), data / "euclid_abell_2764_example.jpeg")
             shutil.copy2(processing.example_source_path(), data / "example_gs_pic.jpeg")
             with patch.object(processing, "__file__", str(root / "LensDesktop" / "processing.py")):
                 background = processing.SkyBackground()
                 background.load(processing.default_background_path())
-                self.assertEqual(background.path, data / "euclid_patch_example.jpg")
+                self.assertEqual(background.path, data / "euclid_abell_2764_example.jpeg")
                 self.assertIsNotNone(background.image)
                 photo = processing.read_image_bgr(processing.example_source_path())
                 self.assertEqual(photo.shape[2], 3)

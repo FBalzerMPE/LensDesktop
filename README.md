@@ -82,7 +82,7 @@ The PyInstaller specification and icons remain at the repository root.
 
 View toggles and lens sliders are grouped in a settings panel beside the image.
 Related controls are grouped in keyboard-accessible expanders, with a restrained
-teal accent and rounded panels. Source, Source placement, and View start open;
+teal accent and rounded panels. Source, Source placement, View, and Print / export start open;
 Camera setup, Input / greenscreen, Source relative to lens, Sky background, and
 Lens start collapsed.
 Click a section header to expand/collapse it; values and enabled states are
@@ -109,12 +109,14 @@ marker. Clicking the settings panel does not place markers.
 
 Ctrl+V hides or restores the panel and toggles the window frame for presentation.
 Settings are retained. Screenshots export the image, not the settings panel.
-Greenscreen controls are described below. A4 export remains a future phase
-described in [PLAN.md](PLAN.md).
+Greenscreen controls and A4 PDF export are described below. Remaining work is
+tracked in [PLAN.md](PLAN.md).
 
 ### Sky background and source placement
 
-The bundled [Euclid example](data/euclid_patch_example.jpg) loads by default.
+The bundled [Euclid image of Abell 2764](data/euclid_abell_2764_example.jpeg)
+loads by default. The earlier [sky mosaic](data/euclid_patch_example.jpg) remains
+available through **Load...**.
 Its source, credits, and license are in [data/README.md](data/README.md); retain
 the required attribution/license when sharing images that use it.
 
@@ -123,7 +125,7 @@ In **Sky background**:
 - **Load...** selects a local PNG/JPEG, including non-ASCII Windows filenames.
   A failed load leaves the last valid sky in place; cancelling does nothing.
 - **Clear** removes the sky and uses a black backdrop. **Default** restores the
-  bundled Euclid image.
+  bundled Abell 2764 image.
 - **Fill** preserves aspect ratio and crops the center to fill the canvas.
   **Fit** preserves the whole sky image and adds black margins.
 - In **Source placement**, the **Source size** slider scales the rendered source
@@ -302,6 +304,59 @@ canvases can be CPU-heavy, and the timer's 30 Hz target is not a guaranteed rate
 Actual camera lighting, shadows, hair edges, and spill should be tuned using
 the mask preview on your setup.
 
+### Printable A4 PDF
+
+1. Click **Freeze input**, or load a static image / **Hand example**. Lens and
+   greenscreen controls remain adjustable; a frozen input does not lock the UI.
+2. Configure the foreground, input zoom/mirroring, lens, optional Cross/Cusp/Fold
+   placement, sky and post-lens source placement as desired.
+3. Turn off **De-lensing**. Open **Print / export** and select **Export A4 PDF...**,
+   or press **Ctrl+P**. Choose a PDF filename.
+
+The exporter creates one **portrait A4 page**, with German headings and
+explanations, following the five-panel layout of the earlier composition:
+
+1. Original native photograph, without cropping, mirroring or greenscreen removal.
+2. Foreground after the current keying, input crop/framing and mirroring.
+   A checkerboard indicates transparency; disabled keying is explicitly noted.
+3. Positioned source with the **caustic in the source plane**.
+4. Lensed foreground with the **critical curve in the image plane**.
+5. Foreground montage over the **currently selected sky**, defaulting to Abell 2764.
+
+The two curve types are deliberately shown in their respective planes rather
+than treated as the same physical coordinates. Diagnostic panels always include
+the curves; the montage follows the GUI's curve, marker and lens-light settings.
+Dual view and Source/Mask preview selection do not determine the PDF layout.
+
+Export captures detached copies of the frozen pixels, sky and current settings
+before opening the save dialog. It re-renders the model at print resolution
+(300 dpi page layout), rather than enlarging the displayed pixmap. Text and
+diagnostic curves are vector elements. The original image retains its native
+pixels; export cannot recover detail absent from a low-resolution input.
+
+The montage is a wide panel. **Fit/Fill** applies to that panel's aspect ratio,
+so its sky crop can differ from the square live preview. The lens field remains
+square and undistorted within it. Source size still scales the rendered layer;
+offsets remain percentages of the destination panel width/height.
+The model lens is illustrative and is not inferred from the galaxy-cluster
+photograph. The sky never passes through lensing.
+
+Small source settings can produce very small printed copies; increase Input size
+and/or post-lens Source size in the GUI if desired. Larger sources can instead
+merge into arcs; relevant source-size warnings appear on the page.
+Invalid or fully removed foregrounds report an error instead of exporting a
+stale scene. Cancellation leaves the existing output alone, and successful PDFs
+replace the target atomically. Controls pause briefly while rendering and recover
+after success or failure; the timer's previous running/stopped state is retained.
+
+Bundled Euclid images include their source, credits and **CC BY-SA 3.0 IGO**
+license on the page. Retain these when distributing a montage. For a custom sky,
+the exporter identifies the filename and reminds you to check its rights; it
+cannot infer the owner's credit or license automatically.
+
+Open the PDF in a viewer and print on A4 at **actual size / 100%**. Direct printing
+from the application is not implemented.
+
 ### Regression checks
 
 The focused checks use the existing environment and Python's standard-library
@@ -317,6 +372,24 @@ These checks use synthetic desktop frames and simulated cameras, including
 failed opens, disconnects, slow drivers, cancellation, and resource cleanup.
 Actual webcams, Windows permissions, native keyboard focus appearance, and
 display scaling should also be checked on the target laptop.
+
+**Current A4 verification:** 21 targeted checks passed, including snapshot
+ownership, export guards, atomic failures, packaged resources and a keyed
+GUI-versus-print comparison. A native Windows hand-image PDF was generated and
+inspected for its single A4 page, German text/credits, five embedded images,
+print-resolution raster sizes and page bounds.
+
+**Open verification:** The latest full run executed 157 tests: 155 passed and
+two failed because the keying mock still targeted its former location and the
+shortcut expectation omitted the new Ctrl+P action. Those expectations have
+been updated, but the full suite has not been rerun. An additional frozen-webcam
+print-snapshot test also awaits execution. Further testing was stopped at the
+user's request; no final all-green claim is made.
+
+Remaining work includes a physical print check, packaged Windows executable
+smoke test, final live-camera/performance checks, and the already deferred
+125% presentation-mode one-pixel edge case. Screenshots/sequences still export
+detached pixmap copies rather than the new formal print-scene snapshot.
 
 # Lens Desktop
 
@@ -334,6 +407,7 @@ Einstein Radius : Einstein Radius of the mass profile.
 You can use the following shortcuts:
 
 - Ctrl+S : To Save the currently shown screen (without the GUI printed on top of it).
+- Ctrl+P : To export a German five-panel A4 PDF from a frozen/static input in forward mode.
 - Ctrl+F : To switch between desktop capture and the selected webcam, or reveal camera controls if none is selected.
 - Ctrl+R : To Save a sequence of images in which the Einstein radius increases up
          to its current value (this allows to create nice gifs, e.g. using ffmpeg to postprocess the images).

@@ -4,6 +4,7 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_all
 
 datas = [
     (os.path.join(SPECPATH, 'data', 'euclid_patch_example.jpg'), 'data'),
+    (os.path.join(SPECPATH, 'data', 'euclid_abell_2764_example.jpeg'), 'data'),
     (os.path.join(SPECPATH, 'data', 'example_gs_pic.jpeg'), 'data'),
     (os.path.join(SPECPATH, 'data', 'README.md'), 'data'),
 ]

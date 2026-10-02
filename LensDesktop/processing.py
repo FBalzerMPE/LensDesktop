@@ -61,6 +61,14 @@ def caustic_geometry(beta_x: np.ndarray, beta_y: np.ndarray, step: float) -> Cau
     return result
 
 
+def foreground_bounds(alpha: np.ndarray) -> tuple[int, int, int, int]:
+    visible = alpha > 1 / 255
+    rows, columns = np.flatnonzero(np.any(visible, axis=1)), np.flatnonzero(np.any(visible, axis=0))
+    if not rows.size or not columns.size:
+        raise ImageError("No visible source remains. Adjust the greenscreen settings or bring the subject into view.")
+    return int(rows[0]), int(rows[-1] + 1), int(columns[0]), int(columns[-1] + 1)
+
+
 def place_source(
     color: np.ndarray, alpha: np.ndarray, einstein_radius: float,
     size_percent: float, position: tuple[float, float],
@@ -73,11 +81,7 @@ def place_source(
     height, width = alpha.shape
     if height != width or width < 4 or color.shape != (height, width, 3):
         raise ImageError("Source placement requires matching square color and alpha canvases.")
-    visible = alpha > 1 / 255
-    rows, columns = np.flatnonzero(np.any(visible, axis=1)), np.flatnonzero(np.any(visible, axis=0))
-    if not rows.size or not columns.size:
-        raise ImageError("No visible source remains. Adjust the greenscreen settings or bring the subject into view.")
-    top, bottom, left, right = rows[0], rows[-1] + 1, columns[0], columns[-1] + 1
+    top, bottom, left, right = foreground_bounds(alpha)
     color, alpha = color[top:bottom, left:right], alpha[top:bottom, left:right]
     pixels_per_unit = width / 2 - 1
     diameter = einstein_radius * size_percent / 100 * pixels_per_unit
@@ -211,7 +215,14 @@ def remap_layer(
 
 
 def default_background_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "data" / "euclid_patch_example.jpg"
+    return Path(__file__).resolve().parent.parent / "data" / "euclid_abell_2764_example.jpeg"
+
+
+def prepare_input(
+    frame: np.ndarray, settings: ChromaKeySettings, width: int, height: int,
+    mode: str, *, mirror: bool = False, zoom: float = 100,
+) -> tuple[np.ndarray, np.ndarray]:
+    return fit_layer(*chroma_key(frame, settings), width, height, mode, mirror=mirror, zoom=zoom)
 
 
 def example_source_path() -> Path:

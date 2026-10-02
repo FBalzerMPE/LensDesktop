@@ -6,8 +6,10 @@ Date: 2026-10-02
 
 Improve the existing Qt interface, allow selecting a webcam, load a custom sky
 image, and lens a greenscreen-removed subject over that static image. Prepare
-for a printable explanatory A4 page, but defer its content and layout until
-further instructions.
+for a printable explanatory A4 page. The user has now supplied the earlier
+composition and approved a frozen-input, five-panel German portrait PDF.
+Implementation and native PDF inspection are complete; final verification
+was paused at the user's request.
 
 This is an incremental feature plan, not a framework migration or a rewrite.
 This document tracks completed batches and the remaining implementation work.
@@ -97,6 +99,7 @@ later implementation requirement demonstrates a need.
 | REQ-010 | Compact collapsible controls with restrained styling; cap visible window height to the available screen; use a source-size slider defaulting/resetting to 25%. |
 | REQ-011 | Independently zoom/crop the input before lensing by a specified percentage, consistently across framing, masks, previews and exports without modifying native calibration pixels. |
 | REQ-012 | Independently shrink the input relative to the Einstein radius and select adaptive Cross/Cusp/Fold source-plane presets, with explicit finite-source/degenerate-lens limitations and safe scene exports. |
+| REQ-013 | Export a German five-panel portrait A4 PDF from a frozen/static input using current GUI settings and a detached print-resolution scene. Use Abell 2764 as the application default, but montage the currently selected sky with appropriate attribution. |
 
 ## Proposed file boundaries
 
@@ -107,12 +110,14 @@ features. Implemented modules and explicitly marked future modules are:
 LensDesktop/
     __init__.py    Package marker
     __main__.py    Launcher for python -m LensDesktop
-    app.py         Qt application integration, existing lens math and markers
+    app.py         Qt application, source controls and export integration
+    lensing.py     Shared existing lens math, forward layers, curves and markers
     controls.py    Layout-managed settings panel and control signals
     qt_compat.py   Shared binding loader so application and panel use the same Qt
     sources.py     Desktop/webcam/static normalization, selection, worker and cleanup
     processing.py  Sky loading/cache, fitting, chroma keying, alpha remapping and composition
-    scene.py       Planned: scene result and detached export snapshot
+    scene.py       Detached pixels/settings/attribution and independent print rendering
+    a4_export.py   German five-panel A4 PDF layout and atomic Qt PDF writing
 tests/
     test_ui.py          Panel, canvas, controls and image-export checks
     test_entrypoint.py  Package and script launcher checks
@@ -500,7 +505,7 @@ Sequence capture restores parameters and render state even if export fails.
 
 - [x] T013 [Plan:5.1] Implement transparent forward transformation/composition helpers in `LensDesktop/processing.py`, reusing existing lens maps from `LensDesktop/app.py`.
 - [x] T014 [Plan:5.2] Add an alpha-aware inverse reconstruction path alongside `inverse_remap_image()` in `LensDesktop/app.py`, preserving its legacy opaque path.
-- [ ] T015 [Plan:5.3] Define the scene result and detached snapshot structures in `LensDesktop/scene.py`, including lens/input settings and optional sky attribution.
+- [x] T015 [Plan:5.3] Define the scene result and detached snapshot structures in `LensDesktop/scene.py`, including lens/input settings and optional sky attribution.
 - [x] T016 [Plan:5.1,5.2] Wire the shared scene pipeline into the four rendering paths and overlays in `LensDesktop/app.py`, using one acquired frame per displayed scene.
 - [ ] T017 [Plan:5.3] Update `save_screenshot()` and `recording()` in `LensDesktop/app.py` to export the composed scene consistently and handle cancellation/write errors/state restoration.
 
@@ -514,8 +519,11 @@ and forward lens light explicitly contribute alpha after keying.
 
 Keyed screenshots and inverse sequences are tested, including radius restoration
 and the separate native calibration export. Diagnostic previews export what is
-displayed; select Composed scene for lensed sequences. T015/T017 remain open for
-the formal detached scene-result/snapshot boundary and later A4 metadata.
+displayed; select Composed scene for lensed sequences. T015 is now implemented
+for print export: immutable settings and detached native/sky pixels accompany
+raw, cleaned, source, lensed and montage images. T017 remains open for adopting
+that formal result boundary in existing screenshot/sequence workflows, which
+still use detached displayed-pixmap copies.
 
 Controlled native static dual-view measurements after avoiding redundant color
 conversion/copies: 365 pixels per panel, opaque 40.99 ms / keyed 42.46 ms;
@@ -532,30 +540,53 @@ Forward/inverse, single/dual, overlays, screenshots, and image sequences all use
 the selected source and documented layering. No green/black rectangles or edge
 halos appear where the foreground is transparent.
 
-### Phase 6: A4 export preparation; actual export deferred
+### Phase 6: Frozen-input A4 PDF
 
-Preparation depends on Phase 5. Actual page implementation is blocked until
-the user supplies the remaining instructions.
+**Confirmed decisions:** Frozen means the existing Static / Freeze input mode,
+not permanently locking the controls. Abell 2764 becomes the application default;
+the PDF uses whichever sky is currently selected. The user approved portrait A4,
+German text and the earlier five-panel arrangement. Direct application printing
+is outside this first PDF delivery.
 
-**Plan 6.1 / REQ-006:** Reuse the detached scene snapshot as the future print
-input: images, lens settings, source description, and sky attribution. Do not
-capture a screenshot of the UI or open a misleading unfinished export dialog.
+**Plan 6.1 / REQ-006, REQ-013:** Capture detached native pixels, sky and frozen
+lens/input/display metadata at export invocation. Re-render independently of the
+live canvas, source/mask preview and single/dual mode. Reuse the existing SIE
+equations, keying/framing, pre-lens placement, forward remapping, lens light,
+markers and critical/caustic extraction. Keep the opaque cubic path separate
+from premultiplied linear alpha rendering.
 
-**Plan 6.2 / REQ-006:** Later confirm page language, explanatory text, audience,
-portrait/landscape orientation, diagram/image arrangement, caption requirements,
-credits, and whether PDF, direct printing, or both are required. Prefer existing
-Qt PDF/printing facilities if suitable. Use physical A4 dimensions (210 x
-297 mm), explicit margins, and print-quality scene rendering rather than
-stretching a low-resolution preview. Exact resolution and page design remain
-undecided.
+**Plan 6.2 / REQ-006, REQ-013:** Use Qt's existing PDF facilities for one A4
+portrait page with 12 mm content margins and a 300 dpi layout. Include native
+raw photo, cleaned foreground, source/caustic diagram, lensed/critical-curve
+diagram, and a wide sky montage. Label the two coordinate planes separately.
+Diagnostic curves are always visible; montage overlays follow the GUI.
+Fit/Fill and percentage placement operate on the wide montage destination;
+the lens field remains undistorted. Include normed model/input settings,
+finite-source caveats, and sky source/credits/license. Unknown custom skies
+must not receive fabricated attribution. Save atomically and restore timer,
+cursor and control states after errors.
 
-- [ ] T018 [Plan:6.1] Confirm that `LensDesktop/scene.py` snapshots provide independent images, settings, and attribution suitable for later high-resolution rendering.
-- [ ] T019 [Plan:6.2] After receiving page instructions, refine the export tasks in `PLAN.md`; only then implement the page renderer and any required Qt print integration.
+- [x] T018 [Plan:6.1] Verify independent snapshot pixels/settings/attribution and print-resolution re-rendering.
+- [x] T019 [Plan:6.2] Implement and verify the five-panel A4 PDF renderer and frozen-input GUI export. **Implemented; final verification pending after user-requested stop.**
 
-**Acceptance now:** Snapshot contents are usable independently of the live
-camera and Qt controls. **Acceptance later:** A4 PDF/page dimensions, content,
-image clarity, attribution, and a physical print are checked against the user's
-instructions. Do not claim A4 export is delivered before this gate is met.
+**Implementation/verification status:** Print / export and Ctrl+P require static
+input and forward lensing, without changing the current modes. Native Windows
+export of the supplied keyed hand over Abell 2764 took about 1.06 seconds and
+produced an approximately 0.82 MB PDF. Independent inspection verified one
+standard A4 page, German text and credits, five embedded images (native
+1200x1600 photo, three 734x734 panels, 2197x733 montage), in-page text bounds
+and successful PDF rasterization. The A4 preview was accepted by the user.
+The independent reader was isolated validation tooling, not an application
+dependency; Qt PDF writing adds no runtime package requirement.
+
+Twenty-one targeted scene/PDF/GUI/resource checks passed. The latest full run
+had 157 tests: 155 passed, two failed from outdated test expectations for the
+relocated keying helper and new Ctrl+P shortcut. These expectations were updated,
+but not rerun. The subsequent frozen-webcam snapshot test and final small
+caption/annotation changes are also unverified. The user explicitly requested
+documentation and wrap-up rather than more implementation/testing.
+A final regression run and physical A4 print remain open; do not claim a
+fully verified final batch.
 
 ### Phase 7: Validation and documentation
 
@@ -582,7 +613,7 @@ do not claim untested Qt bindings or platforms are supported.
 
 - [ ] T020 [Plan:7.1] Perform the phase acceptance checks and final desktop/webcam/sky/keying/output matrix against `LensDesktop/app.py` and the extracted modules.
 - [ ] T021 [Plan:7.1] Measure and compare pipeline timings on Windows and resolve regressions caused by the changes in `LensDesktop/sources.py`, `LensDesktop/processing.py`, and `LensDesktop/app.py`.
-- [ ] T022 [Plan:7.2] Update `README.md` with verified setup and feature instructions.
+- [x] T022 [Plan:7.2] Update `README.md` with setup, feature instructions, A4 workflow, attribution and explicit verification gaps.
 - [ ] T023 [Plan:7.2] Check `LensDesktop.spec` module/resource inclusion and smoke-test a packaged Windows build when packaging dependencies are available.
 
 No new automated-test tooling is prescribed in this plan. Phase 1 adds focused
@@ -602,13 +633,14 @@ Implementation evidence below names expected future outputs, not completed work.
 | REQ-003 | 3.1, 7.1 | T008-T009, T020 | `LensDesktop/processing.py` image loading/cache; sky controls |
 | REQ-004 | 4.1, 4.2, 7.1 | T010-T012, T020 | `LensDesktop/processing.py` framing/keying; input controls and previews |
 | REQ-005 | 3.2, 4.2, 5.1, 5.2, 5.3, 7.1 | T009-T010, T012-T017, T020-T021 | Layer coverage/composition and placement; later chroma key and scene/snapshot pipeline |
-| REQ-006 | 5.3, 6.1, 6.2, 7.1 | T015, T017-T020 | `LensDesktop/scene.py` snapshots; later user-approved A4 export implementation |
+| REQ-006 | 5.3, 6.1, 6.2, 7.1 | T015, T017-T020 | Detached `LensDesktop/scene.py` print snapshots; `LensDesktop/a4_export.py` PDF renderer; frozen-input GUI integration |
 | REQ-007 | 1.1, 1.2, 2.1, 5.1, 5.2, 7.1, 7.2 | T001-T004, T007, T013-T014, T016, T020-T023 | Preserved opaque desktop behavior; `README.md`; verified packaging |
 | REQ-008 | 3.1, 3.2 | T008-T009 | Post-lens placement helpers and controls; default `data` asset; all view/export integrations |
 | REQ-009 | 4.0 | T024 | Static source/cache; load/example/freeze/resume controls; raw input export; hand resource; static source/UI tests |
 | REQ-010 | 1.3 | T025 | Reusable expanders/styles; size slider/default; available-screen height/state hooks; polish tests |
 | REQ-011 | 4.3 | T026 | Paired zoom crop/framing; slider/cache/preview integration; native export and all-mode tests |
 | REQ-012 | 4.4 | T027 | Caustic-derived presets; alpha-aware pre-lens placement; opt-in controls/status; safe screenshots/sequences; point-source and Qt tests |
+| REQ-013 | 5.3, 6.1, 6.2, 7.2 | T015, T018-T019, T022 | Shared lens helpers, detached print rendering, five-panel German PDF, static-mode guard, Abell resource/default and attribution |
 
 ## Suggested delivery order
 
@@ -617,4 +649,24 @@ Implementation evidence below names expected future outputs, not completed work.
 3. Add sky loading, static calibration input, and then a usable greenscreen preview.
 4. Deliver the transparent lensing/composition pipeline and consistent exports.
 5. Complete regression checks and usage documentation.
-6. Implement the A4 page only after its instructions are supplied.
+6. A4 instructions have been supplied and the PDF implemented; finish its
+   regression and physical-print checks when testing resumes.
+
+## Open todos at A4 wrap-up
+
+- **T019 / T020:** Run the final regression suite after the two expectation fixes,
+  the new frozen-webcam test, and latest caption/annotation adjustments. The
+  present suite is expected to contain 158 tests, but that run has not occurred.
+- **T019:** Print the PDF on physical A4 at actual size / 100%; check legibility,
+  colors and margins. Small GUI sources remain small on paper by design.
+- **T017:** Adopt the formal scene result in existing screenshot/sequence exports;
+  their current detached-pixmap behavior is preserved.
+- **T020 / T021:** Final live-camera/lighting, mixed-DPI and performance checks.
+  Prior live rendering measurements exceeded the 30 Hz target at larger canvases.
+- **T023:** Build and smoke-test the Windows executable. The spec includes Abell
+  2764 and resource-path tests passed; the full executable was not built.
+- **Deferred UI issue:** The known one-physical-pixel Windows 125% maximized
+  presentation-mode work-area overshoot remains untouched.
+
+No additional implementation or testing was performed after the user's
+request to stop and finish documentation.

@@ -12,7 +12,7 @@ class BackgroundProcessingTests(unittest.TestCase):
     def test_bundled_default_exists_and_loads_as_rgb(self):
         background = processing.SkyBackground()
         background.load(processing.default_background_path())
-        self.assertEqual(background.path.name, "euclid_patch_example.jpg")
+        self.assertEqual(background.path.name, "euclid_abell_2764_example.jpeg")
         self.assertEqual(background.image.dtype, np.uint8)
         self.assertEqual(background.image.shape[2], 3)
         self.assertTrue(background.image.flags.c_contiguous)

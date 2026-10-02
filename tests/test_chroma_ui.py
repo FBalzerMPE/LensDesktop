@@ -157,7 +157,7 @@ class ChromaIntegrationTests(unittest.TestCase):
         cache = self.window._keyed_input_cache
         self.assertFalse(cache[2].flags.writeable)
         self.assertFalse(cache[3].flags.writeable)
-        with patch.object(desktop, "chroma_key", wraps=desktop.chroma_key) as key:
+        with patch("LensDesktop.processing.chroma_key", wraps=desktop.chroma_key) as key:
             self.window.sliderb.setValue(80)
             self.window.update_view()
             key.assert_not_called()

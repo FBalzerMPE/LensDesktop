@@ -176,7 +176,7 @@ class SettingsPanelTests(unittest.TestCase):
             for shortcut in self.window.findChildren(desktop.QtWidgets.QShortcut)
         }
         self.assertEqual(
-            shortcuts, {"Ctrl+S", "Ctrl+L", "Ctrl+R", "Ctrl+F", "Ctrl+V"}
+            shortcuts, {"Ctrl+S", "Ctrl+L", "Ctrl+R", "Ctrl+F", "Ctrl+V", "Ctrl+P"}
         )
         for shortcut in self.window.findChildren(desktop.QtWidgets.QShortcut):
             if shortcut.key().toString() == "Ctrl+V":

@@ -318,6 +318,20 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.set_inverse_mode(False)
         layout.addWidget(self.lens_section)
 
+        self.export_section = CollapsibleSection("Print / export", expanded=True)
+        self.export_a4 = QtWidgets.QPushButton("Export A4 PDF...")
+        self.export_a4.setEnabled(False)
+        self.export_a4.setToolTip("Freeze input or load a static image. A4 export requires forward lensing.")
+        self.export_section.body_layout.addWidget(self.export_a4)
+        self.export_status = QtWidgets.QLabel(
+            "Portrait A4, German text, five panels. Freeze input or load a static image first. Ctrl+P exports the PDF."
+        )
+        self.export_status.setWordWrap(True)
+        self.export_status.setTextFormat(QtCore.Qt.PlainText)
+        self.export_status.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+        self.export_section.body_layout.addWidget(self.export_status)
+        layout.addWidget(self.export_section)
+
         hint = QtWidgets.QLabel("Ctrl+V: hide/show controls")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -325,6 +339,7 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.sections = (
             self.source_section, self.input_section, self.background_section,
             self.configuration_section, self.placement_section, self.view_section, self.lens_section,
+            self.export_section,
         )
         self.setWidget(content)
         self._apply_style()
