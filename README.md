@@ -91,10 +91,45 @@ marker. Clicking the settings panel does not place markers.
 
 Ctrl+V hides or restores the panel and toggles the window frame for presentation.
 Settings are retained. Screenshots export the image, not the settings panel.
-Camera selection, sky backgrounds, greenscreen processing, and A4 export are
-future phases described in [PLAN.md](PLAN.md); this UI update does not add them.
+Sky backgrounds, greenscreen processing, and A4 export are future phases
+described in [PLAN.md](PLAN.md).
 
-### UI regression checks
+### Selecting a webcam
+
+The application starts with **Desktop** capture and does not open or probe any
+camera until you request it.
+
+1. In the **Source** group, click **Refresh** to check camera indices 0 through 4.
+2. Choose a discovered **Camera N**, then choose **Webcam** as the input source.
+3. Alternatively, enter an index (0-99) and click **Use index / retry** to open it
+   directly. Index 0 commonly refers to the integrated webcam; external cameras
+   may use another index. These indices are not stable device names.
+4. Choose **Desktop** to return to screen capture. **Ctrl+F** toggles between the
+   desktop and the selected webcam; without a selection, it reveals the camera
+   controls rather than guessing a device.
+
+Webcam frames are center-cropped to a square and mirrored. Portrait, landscape,
+and square inputs are supported. The source is used in forward/inverse and
+single/dual views, as well as the existing image export workflows.
+
+Opening and reading cameras, refreshing the list, and releasing devices happen
+on a worker thread. A failed open keeps the previous source. If an active camera
+stops producing frames, the last displayed image is explicitly marked as frozen
+in the status text; click **Use index / retry**, or select **Desktop**.
+
+**Cancel** stops a refresh between driver operations. Selecting Desktop (or
+Ctrl+F while opening) cancels a pending camera switch. A blocking OpenCV driver
+call cannot be forcibly interrupted: cancellation and shutdown finish when that
+call returns. The window remains responsive and reports when shutdown is
+waiting for the driver. A scan may temporarily retain the active camera's last
+frame while probing other indices.
+
+If a camera cannot be opened, check Windows **Settings > Privacy & security >
+Camera**, enable camera access for desktop apps, and close other programs using
+the camera. OpenCV's automatic capture backend is used; actual backend/device
+compatibility still needs verification on your laptop.
+
+### Regression checks
 
 The focused checks use the existing environment and Python's standard-library
 test runner; no additional test dependency is needed:
@@ -105,9 +140,10 @@ $env:QT_QPA_PLATFORM = "offscreen"
 Remove-Item Env:QT_QPA_PLATFORM
 ```
 
-These checks use synthetic desktop frames. Actual desktop capture, native
-keyboard focus appearance, and display scaling should also be checked on the
-target laptop.
+These checks use synthetic desktop frames and simulated cameras, including
+failed opens, disconnects, slow drivers, cancellation, and resource cleanup.
+Actual webcams, Windows permissions, native keyboard focus appearance, and
+display scaling should also be checked on the target laptop.
 
 # Lens Desktop
 
@@ -125,7 +161,7 @@ Einstein Radius : Einstein Radius of the mass profile.
 You can use the following shortcuts:
 
 - Ctrl+S : To Save the currently shown screen (without the GUI printed on top of it).
-- Ctrl+F : To turn the device camera on/off for recording.
+- Ctrl+F : To switch between desktop capture and the selected webcam, or reveal camera controls if none is selected.
 - Ctrl+R : To Save a sequence of images in which the Einstein radius increases up
          to its current value (this allows to create nice gifs, e.g. using ffmpeg to postprocess the images).
 - Ctrl+V : To turn some of the GUI elements on/off.

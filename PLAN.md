@@ -37,7 +37,10 @@ may change its displayed crop, but not its lensing. The illustrative lens mass
 remains represented by the existing SIE model and optional lens-light overlay;
 loading a sky photograph does not derive a mass distribution from that image.
 
-## Current implementation and constraints
+## Baseline and constraints
+
+The implementation observations below describe the starting point for this
+plan. Completed changes and their verification are recorded under each phase.
 
 - [LensDesktop/app.py](LensDesktop/app.py) contains the Qt window, capture logic,
   transformations, controls, and export functions.
@@ -96,12 +99,14 @@ LensDesktop/
     app.py         Qt application integration, existing lens math and markers
     controls.py    Layout-managed settings panel and control signals
     qt_compat.py   Shared binding loader so application and panel use the same Qt
-    sources.py     Planned: desktop/webcam acquisition, selection and cleanup
+    sources.py     Desktop/webcam normalization, selection, worker and cleanup
     processing.py  Planned: input normalization, framing, keying and composition
     scene.py       Planned: scene result and detached export snapshot
 tests/
     test_ui.py          Panel, canvas, controls and image-export checks
     test_entrypoint.py  Package and script launcher checks
+    test_sources.py     Frame normalization and threaded camera lifecycle checks
+    test_camera_ui.py   Source controls, camera rendering and error integration
 README.md          Setup, controls, layering and troubleshooting documentation
 LensDesktop.spec   Root-level packaging specification
 ```
@@ -182,15 +187,37 @@ Release captures on switching, failed probes, and application close. Ctrl+F
 toggles desktop and the selected camera, and uses the selector when no camera
 has been selected.
 
-- [ ] T004 [Plan:2.1] Implement source acquisition and capture lifecycle in `LensDesktop/sources.py`, including BGRA-to-BGR desktop normalization and checked webcam reads.
-- [ ] T005 [Plan:2.2] Implement bounded camera discovery, manual index selection, refresh/cancel behavior, and resource release in `LensDesktop/sources.py`.
-- [ ] T006 [Plan:2.2] Add source controls in `LensDesktop/controls.py` and wire source transitions, notifications, Ctrl+F, and shutdown cleanup in `LensDesktop/app.py`.
-- [ ] T007 [Plan:2.1,2.2] Replace repeated capture branches in all four `LensDesktop/app.py` rendering methods with the common source boundary, preserving opaque rendering behavior.
+- [x] T004 [Plan:2.1] Implement source acquisition and capture lifecycle in `LensDesktop/sources.py`, including BGRA-to-BGR desktop normalization and checked webcam reads.
+- [x] T005 [Plan:2.2] Implement bounded camera discovery, manual index selection, refresh/cancel behavior, and resource release in `LensDesktop/sources.py`.
+- [x] T006 [Plan:2.2] Add source controls in `LensDesktop/controls.py` and wire source transitions, notifications, Ctrl+F, and shutdown cleanup in `LensDesktop/app.py`.
+- [x] T007 [Plan:2.1,2.2] Replace repeated capture branches in all four `LensDesktop/app.py` rendering methods with the common source boundary, preserving opaque rendering behavior.
 
 **Acceptance:** Desktop, an integrated webcam, and an external webcam can be
 selected where present. Busy/missing cameras and unplugging are reported without
 crashing or freezing the UI. Repeated switches and shutdown release the device.
 Portrait, landscape, and square frames work without invalid crops or color swaps.
+
+**Implementation status (2026-10-02):** T004-T007 are implemented. Camera
+ownership stays on one worker thread; rendering polls a copied latest-frame
+buffer, avoiding a growing queue of image signals. Opening a replacement
+camera is transactional, desktop is the startup default, and no automatic
+probing occurs. Refresh probes indices 0-4; manual selection supports 0-99.
+Frames are normalized to BGR and webcam framing is center-cropped and mirrored.
+All four view modes use one shared acquired frame per displayed update.
+Failures are reported in the panel, status bar, and error log without black-frame
+fallbacks or silent source switching. Device release occurs on the worker.
+Cancel/close cannot interrupt a blocking native driver call, so shutdown remains
+responsive while waiting for the call to return and cleanup to finish.
+
+All 40 regression tests pass at the default and 1.5 offscreen scale factors.
+Coverage includes colors, frame shapes, switching, discovery, cancellation,
+disconnects, stale requests, slow drivers, and shutdown. Native Windows controls,
+simulated webcam rendering, and clean release were also smoke-tested; Python
+compilation and whitespace checks pass. No physical camera was opened during
+validation. Integrated/external webcams, busy devices, unplug/retry behavior,
+permissions, and performance still require hardware verification under T020.
+The existing automatic OpenCV backend is retained until actual hardware results
+justify a different backend. No new dependencies were added.
 
 ### Phase 3: Static sky image
 

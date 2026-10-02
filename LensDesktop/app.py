@@ -13,7 +13,7 @@ Einstein Radius : Einstein Radius of the mass profile.
 You can use the following shortcuts:
 
 Ctrl+S : To Save the currently shown screen (without the GUI printed on top of it).
-Ctrl+F : To turn the device camera on/off for recording.
+Ctrl+F : To switch desktop/webcam input or reveal camera controls.
 Ctrl+R : To Save a sequence of images in which the Einstein radius increases up
          to its current value (this allows to create nice gifs, e.g. using ffmpeg to postprocess the images).
 Ctrl+V : To turn some of the GUI elements on/off.
@@ -41,11 +41,13 @@ import gc
 import numpy as np
 import cv2
 import mss
+from mss.exception import ScreenShotError
 from functools import partial
 from scipy.interpolate import RegularGridInterpolator as interp
 from scipy.ndimage import zoom
 from .qt_compat import QT_PKG, QtWidgets, QtCore, QtGui
 from .controls import SettingsPanel
+from .sources import CameraWorker, SourceError, normalize_bgr, frame_for_canvas
 
 # Set window extent
 # base_w = 600
@@ -62,40 +64,6 @@ print(f"[info] Using {QT_PKG}")
 # from QtWidgets import QtWidgets.QApplication, QtWidgets.QLabel, QtWidgets.QMainWindow, QtWidgets.QSlider, QtWidgets.QSlider, QtWidgets.QFileDialog, QtWidgets.QShortcut
 # from QtCore import Qt, QtCore.QTimer
 # from QtGui import QtGui.QImage, QtGui.QPixmap, QtGui.QKeySequence
-
-
-def capture_cam_rect(cap, width, height):
-    """
-    Function that captures a frame recorded from the camera of the device
-    and then returns it to the lens desktop code cropped and resized.
-
-    Parameters
-    ----------
-    amp : cap is the cv2 VideoCapture instance
-        This is used to catch the current frame of your camera
-    width : int
-        Pixel width of the LensDesktop window
-    height : int
-        Pixel height of the LensDesktop window
-
-    Returns
-    -------
-    frame : numpy.array
-        The recorded camera frame cropped and resized
-    """
-
-    ret, frame = cap.read()
-    frame = frame[
-        :,
-        (frame.shape[1] - frame.shape[0]) // 2 : -(frame.shape[1] - frame.shape[0]) // 2
-        - 1,
-    ]
-
-    if not ret:
-        return np.zeros((height, width, 4)).astype(np.uint8)
-    else:
-        frame = cv2.resize(frame, (2 * width, 2 * height))[:, ::-1]
-        return frame
 
 
 def reduce_points(points, threshold):
@@ -304,7 +272,7 @@ class LensDesktop(QtWidgets.QMainWindow):
     This class is a QtWidgets.QMainWindow of the application that does the lensing of the Desktop / Camera input.
     """
 
-    def __init__(self):
+    def __init__(self, camera_factory=None):
         """
         Create a new Window in which the application lives.
         Define all relevant parameters used during the run time of the Script.
@@ -319,6 +287,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.heart = False
         self.frame = True
         self.old_pos = None
+        self._closing = False
 
         # capture setup
         self.sct = mss.MSS()
@@ -333,7 +302,12 @@ class LensDesktop(QtWidgets.QMainWindow):
             sys.exit(1)
 
         self.cam = False
-        self.vidcap = None
+        self.selected_camera_index = None
+        self.camera_token = None
+        self._pending_camera = None
+        self._discovery_token = None
+        self._camera_fault = False
+        self._last_source_error = None
 
         self.setWindowFlags(QtCore.Qt.Window)
         central = QtWidgets.QWidget()
@@ -368,6 +342,19 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.inverse_checkbox.stateChanged.connect(self.update_view)
         self.lenslight_checkbox.stateChanged.connect(self.update_view)
         self.critical_checkbox.stateChanged.connect(self.update_view)
+
+        self.camera_worker = CameraWorker(self, capture_factory=camera_factory)
+        self.camera_worker.opened.connect(self._camera_opened)
+        self.camera_worker.failed.connect(self._camera_open_failed)
+        self.camera_worker.disconnected.connect(self._camera_disconnected)
+        self.camera_worker.discovered.connect(self._cameras_discovered)
+        self.camera_worker.finished.connect(self._camera_worker_finished)
+        self.settings_panel.source_selector.currentIndexChanged.connect(self._source_changed)
+        self.settings_panel.source_selector.activated.connect(self._source_activated)
+        self.settings_panel.camera_selector.currentIndexChanged.connect(self._camera_selected)
+        self.settings_panel.refresh_cameras.clicked.connect(self._refresh_cameras)
+        self.settings_panel.cancel_refresh.clicked.connect(self.camera_worker.cancel_discovery)
+        self.settings_panel.open_camera.clicked.connect(self._open_camera_index)
 
         # Timer for view updates.
         self.timer = QtCore.QTimer(self)
@@ -519,13 +506,150 @@ class LensDesktop(QtWidgets.QMainWindow):
         return super().eventFilter(watched, event)
 
     def camera_recording(self):
-        self.cam = not self.cam
-        if self.cam:
-            self.vidcap = cv2.VideoCapture(0)
-            if not self.vidcap.isOpened():
-                self.cam = False
+        if self._closing:
+            return
+        if self.cam or self._pending_camera is not None:
+            self._use_desktop()
+        elif self.selected_camera_index is not None:
+            self._request_camera(self.selected_camera_index)
         else:
-            self.vidcap = None
+            self._show_camera_selector()
+
+    def _show_camera_selector(self):
+        if self.gui_hidden:
+            self.HideGUI()
+        self.settings_panel.ensureWidgetVisible(self.settings_panel.camera_selector)
+        self.settings_panel.camera_selector.setFocus()
+        self._source_status("Select a camera after Refresh, or use a manual camera index.")
+
+    def _source_status(self, message, *, error=False):
+        self.settings_panel.source_status.setText(message)
+        self.statusBar().showMessage(message)
+        if error and message != self._last_source_error:
+            print(f"[error] {message}", file=sys.stderr)
+        self._last_source_error = message if error else None
+
+    def _sync_source_selector(self):
+        with QtCore.QSignalBlocker(self.settings_panel.source_selector):
+            self.settings_panel.source_selector.setCurrentIndex(1 if self.cam else 0)
+
+    def _source_changed(self):
+        if self.settings_panel.source_selector.currentData() == "desktop":
+            self._use_desktop()
+        elif self.selected_camera_index is not None:
+            self._request_camera(self.selected_camera_index)
+        else:
+            self._sync_source_selector()
+            self._show_camera_selector()
+
+    def _source_activated(self, index):
+        if index == 0 and self._pending_camera is not None:
+            self._use_desktop()
+
+    def _camera_selected(self):
+        index = self.settings_panel.camera_selector.currentData()
+        if index is not None:
+            self.selected_camera_index = index
+            self.settings_panel.camera_index.setValue(index)
+            if self.cam:
+                self._request_camera(index)
+
+    def _open_camera_index(self):
+        self._request_camera(self.settings_panel.camera_index.value())
+
+    def _request_camera(self, index):
+        self._pending_camera = self.camera_worker.select(index)
+        self._sync_source_selector()
+        self._source_status(f"Opening camera {index}... Previous source remains active.")
+
+    def _use_desktop(self):
+        self.camera_worker.use_desktop()
+        self._pending_camera = None
+        self.cam = False
+        self.camera_token = None
+        self._camera_fault = False
+        self._sync_source_selector()
+        self._source_status("Desktop capture")
+        self.update_view()
+
+    def _camera_opened(self, token, index):
+        if self._closing or token != self._pending_camera:
+            return
+        self._pending_camera = None
+        self.camera_token = token
+        self.cam = True
+        self._camera_fault = False
+        self.selected_camera_index = index
+        self.settings_panel.camera_index.setValue(index)
+        self._sync_source_selector()
+        with QtCore.QSignalBlocker(self.settings_panel.camera_selector):
+            selector = self.settings_panel.camera_selector
+            item = selector.findData(index)
+            if item < 0:
+                selector.addItem(f"Camera {index}", index)
+                item = selector.findData(index)
+            selector.setCurrentIndex(item)
+        self._source_status(f"Camera {index} active (center-cropped and mirrored).")
+        self.update_view()
+
+    def _camera_open_failed(self, token, message):
+        if self._closing or token != self._pending_camera:
+            return
+        self._pending_camera = None
+        self._sync_source_selector()
+        self._source_status(f"{message} Previous source kept. Use index / retry to try again.", error=True)
+
+    def _camera_disconnected(self, token, message):
+        if self._closing or token != self.camera_token:
+            return
+        self._camera_fault = True
+        self._source_status(
+            f"{message} Last image is frozen. Use index / retry or select Desktop.",
+            error=True,
+        )
+
+    def _refresh_cameras(self):
+        self._discovery_token = self.camera_worker.discover()
+        self.settings_panel.refresh_cameras.setEnabled(False)
+        self.settings_panel.cancel_refresh.setEnabled(True)
+        self._source_status("Scanning camera indices 0-4... A camera driver may take time to respond.")
+
+    def _cameras_discovered(self, token, indices, cancelled, errors):
+        if self._closing or token != self._discovery_token:
+            return
+        self._discovery_token = None
+        self.settings_panel.refresh_cameras.setEnabled(True)
+        self.settings_panel.cancel_refresh.setEnabled(False)
+        with QtCore.QSignalBlocker(self.settings_panel.camera_selector):
+            selector = self.settings_panel.camera_selector
+            selector.clear()
+            selector.addItem("Select a camera...", None)
+            for index in sorted(set(indices + (
+                [self.selected_camera_index] if self.selected_camera_index is not None else []
+            ))):
+                label = f"Camera {index}" if index in indices else f"Camera {index} (manual / previous)"
+                selector.addItem(label, index)
+            selector.setCurrentIndex(max(0, selector.findData(self.selected_camera_index)))
+        if self._pending_camera is not None or self._camera_fault:
+            return
+        if cancelled:
+            message = "Camera scan cancelled. Partial results are listed."
+        elif indices:
+            message = "Scan complete. Select a camera, then choose Webcam."
+        else:
+            message = "No accessible cameras at indices 0-4. Check permissions or try a manual index."
+        if errors:
+            message += f"\n{errors}"
+        self._source_status(message, error=bool(errors) or (not cancelled and not indices))
+
+    def _acquire_source_frame(self):
+        if self.cam:
+            return self.camera_worker.snapshot(self.camera_token)
+        return normalize_bgr(self.capture_screen_rect())
+
+    def _camera_worker_finished(self):
+        if self._closing:
+            self.close()
 
     def update_lensed_map(self):
 
@@ -754,18 +878,28 @@ class LensDesktop(QtWidgets.QMainWindow):
             return
         gc.collect()
         self.set_Geometry_sliders_and_labels()
+        if self._camera_fault or self._closing:
+            return
+        try:
+            frame = self._acquire_source_frame()
+            if frame is None:
+                return
+            frame = frame_for_canvas(frame, self.base_w, self.base_h, camera=self.cam)
+        except (SourceError, cv2.error, ScreenShotError) as error:
+            self._source_status(f"Cannot capture the input image: {error}", error=True)
+            return
 
         # If inverse lensing is selected, do that; otherwise, use single or dual view.
         if self.inverse_checkbox.isChecked():
             if self.dual_checkbox.isChecked():
-                self.update_inverse_dual_view()
+                self.update_inverse_dual_view(frame)
             else:
-                self.update_inverse_single_view()
+                self.update_inverse_single_view(frame)
         else:
             if self.dual_checkbox.isChecked():
-                self.update_dual_view()
+                self.update_dual_view(frame)
             else:
-                self.update_single_view()
+                self.update_single_view(frame)
 
     # Forward Updates
 
@@ -814,14 +948,7 @@ class LensDesktop(QtWidgets.QMainWindow):
                     -1,  # thickness
                 )
 
-    def update_single_view(self):
-
-        if self.cam:
-            arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
-        else:
-            arr = self.capture_screen_rect()
-
-        img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+    def update_single_view(self, img_bgr):
 
         self.show_ps(img_bgr)
 
@@ -862,14 +989,7 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         self.label.setPixmap(result_pixmap)
 
-    def update_dual_view(self):
-
-        if self.cam:
-            arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
-        else:
-            arr = self.capture_screen_rect()
-
-        img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+    def update_dual_view(self, img_bgr):
 
         self.show_ps(img_bgr)
 
@@ -982,18 +1102,13 @@ class LensDesktop(QtWidgets.QMainWindow):
                         -1,  # thickness
                     )
 
-    def update_inverse_single_view(self):
+    def update_inverse_single_view(self, frame):
         """
         When inverse lensing is enabled, we capture the image, perform the forward mapping as before,
         and then use our inverse_remap_image() routine to “undo” the lensing.
         """
 
-        if self.cam:
-            arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
-        else:
-            arr = self.capture_screen_rect()
-
-        img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+        img_bgr = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         if img_bgr.shape[0] != self.base_h or img_bgr.shape[1] != self.base_w:
             img_bgr = cv2.resize(img_bgr, (self.base_w, self.base_h))
 
@@ -1016,18 +1131,13 @@ class LensDesktop(QtWidgets.QMainWindow):
         result_pixmap = QtGui.QPixmap.fromImage(result_image)
         self.label.setPixmap(result_pixmap)
 
-    def update_inverse_dual_view(self):
+    def update_inverse_dual_view(self, frame):
         """
         When inverse lensing is enabled, we capture the image, perform the forward mapping as before,
         and then use our inverse_remap_image() routine to “undo” the lensing.
         """
 
-        if self.cam:
-            arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
-        else:
-            arr = self.capture_screen_rect()
-
-        img_bgr = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)
+        img_bgr = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         if img_bgr.shape[0] != self.base_h or img_bgr.shape[1] != self.base_w:
             img_bgr = cv2.resize(img_bgr, (self.base_w, self.base_h))
 
@@ -1135,6 +1245,16 @@ class LensDesktop(QtWidgets.QMainWindow):
             self.old_pos = event.globalPos()
 
     def closeEvent(self, event):
+        self._closing = True
+        self.timer.stop()
+        self.camera_worker.shutdown()
+        if self.camera_worker.isRunning():
+            event.ignore()
+            self.settings_panel.setEnabled(False)
+            self._source_status("Closing... Waiting for the camera driver to release its devices.")
+            return
+        self._ready = False
+        self.sct.close()
         event.accept()
         QtWidgets.QApplication.instance().quit()
 
