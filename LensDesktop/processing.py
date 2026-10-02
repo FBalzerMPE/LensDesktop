@@ -12,6 +12,36 @@ def default_background_path() -> Path:
     return Path(__file__).resolve().parent.parent / "data" / "euclid_patch_example.jpg"
 
 
+def example_source_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "data" / "example_gs_pic.jpeg"
+
+
+def read_image_bgr(path: str | Path) -> np.ndarray:
+    path = Path(path)
+    try:
+        encoded = np.frombuffer(path.read_bytes(), dtype=np.uint8)
+        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    except (OSError, cv2.error) as error:
+        raise ImageError(f"Cannot load image {path.name}: {error}") from error
+    if image is None:
+        raise ImageError(f"Cannot decode image {path.name}. Select a valid PNG or JPEG.")
+    return image
+
+
+def write_image_bgr(path: str | Path, frame: np.ndarray):
+    path = Path(path)
+    extension = path.suffix.lower()
+    if extension not in (".png", ".jpg", ".jpeg"):
+        raise ImageError("Save the input image as PNG (lossless) or JPEG.")
+    try:
+        ok, encoded = cv2.imencode(extension, frame)
+        if not ok:
+            raise ImageError(f"Cannot encode input image as {extension}.")
+        path.write_bytes(encoded.tobytes())
+    except (OSError, cv2.error) as error:
+        raise ImageError(f"Cannot save input image to {path}: {error}") from error
+
+
 def _validate_fit(width: int, height: int, mode: str):
     if width <= 0 or height <= 0 or mode not in ("fit", "fill"):
         raise ImageError("Background fitting requires a positive canvas size and fit/fill mode.")
@@ -48,13 +78,7 @@ class SkyBackground:
 
     def load(self, path: str | Path):
         path = Path(path)
-        try:
-            encoded = np.frombuffer(path.read_bytes(), dtype=np.uint8)
-            image_bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-        except (OSError, cv2.error) as error:
-            raise ImageError(f"Cannot load sky image {path.name}: {error}") from error
-        if image_bgr is None:
-            raise ImageError(f"Cannot decode sky image {path.name}. Select a valid PNG or JPEG.")
+        image_bgr = read_image_bgr(path)
         image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         image.setflags(write=False)
         self.path = path

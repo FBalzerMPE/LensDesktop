@@ -21,7 +21,7 @@ transformation. The source subject, after greenscreen removal, is transformed
 and placed over the sky:
 
 ```text
-Desktop or selected webcam
+Desktop, selected webcam, or static image
     -> crop / mirror / input adjustments
     -> greenscreen removal: foreground color + alpha mask
     -> lens foreground color AND alpha
@@ -90,6 +90,7 @@ later implementation requirement demonstrates a need.
 | REQ-006 | Prepare a reusable scene snapshot for a later explanatory A4 export; defer the actual page implementation until instructions arrive. |
 | REQ-007 | Preserve existing desktop functionality and document the new Windows workflow and feature behavior. |
 | REQ-008 | Resize and move the rendered source after lensing over an unchanged sky; load the user-supplied Euclid image from `data` by default. |
+| REQ-009 | Load a static input image or freeze live input for reproducible greenscreen testing; save original calibration pixels separately from rendered-scene exports. |
 
 ## Proposed file boundaries
 
@@ -103,7 +104,7 @@ LensDesktop/
     app.py         Qt application integration, existing lens math and markers
     controls.py    Layout-managed settings panel and control signals
     qt_compat.py   Shared binding loader so application and panel use the same Qt
-    sources.py     Desktop/webcam normalization, selection, worker and cleanup
+    sources.py     Desktop/webcam/static normalization, selection, worker and cleanup
     processing.py  Sky loading/cache, fitting, placement and composition; keying planned
     scene.py       Planned: scene result and detached export snapshot
 tests/
@@ -114,8 +115,11 @@ tests/
     test_processing.py Sky, fitting, alpha and placement math
     test_background_ui.py Default sky, all modes, markers and composed exports
     test_resources.py Bundled image/attribution paths and relocated resource layout
+    test_static_source.py Native input ownership, cached fitting and calibration export
+    test_static_ui.py Static selection, freeze/resume, all views and native input saving
 data/
     euclid_patch_example.jpg  User-supplied default sky
+    example_gs_pic.jpeg       User-supplied greenscreen calibration hand photo
     README.md                Image origin, credits and license
 README.md          Setup, controls, layering and troubleshooting documentation
 LensDesktop.spec   Root-level packaging specification
@@ -134,8 +138,9 @@ build configuration, and icons remain at the repository root.
 
 ## Implementation phases and tasks
 
-Each phase should be usable before moving to the next. Task IDs are execution
-order; dependencies are stated explicitly.
+Each phase should be usable before moving to the next. Task IDs normally follow
+execution order; T024 was added later for static calibration preparation.
+Dependencies are stated explicitly.
 
 ### Phase 1: Readable UI first
 
@@ -288,6 +293,34 @@ remain open.
 
 Depends on Phase 2 for normalized frames and Phase 1 for controls.
 
+**Plan 4.0 / REQ-009, REQ-007:** Before implementing keying, support a static
+PNG/JPEG source, the supplied hand example, and freezing the current native
+desktop/webcam input. Keep original pixels separate from writable render buffers.
+Static mode pauses acquisition while leaving lens, sky, and placement controls
+editable. Release a frozen webcam, cancel pending camera switches, and retain
+the cached static image when returning to live input. Add a native input export
+distinct from the existing rendered-scene screenshot.
+
+- [x] T024 [Plan:4.0] Add immutable static input/cache, load/example/freeze/resume controls, Fit/Fill framing, transactional source changes, and native PNG/JPEG input export; bundle the hand example and test all rendering modes and camera transitions.
+
+**Acceptance:** The hand photograph loads without a camera. Frozen input stays
+unchanged while rendering controls vary. Freeze preserves the webcam preview's
+mirroring/crop but exports original, unmirrored pixels. PNG calibration exports
+round-trip exactly at native dimensions. Failed loads and cancelled dialogs do
+not discard input; cancelled camera requests cannot replace a static source.
+
+**Implementation status:** T024 is implemented. Static image fitting is cached;
+rendering and markers use detached buffers. Desktop capture now retains native
+pixels, with resizing performed at the shared rendering boundary. Camera
+freezing releases the device; Desktop/Webcam resume live acquisition. Loaded
+images start in Fit without mirroring. Greenscreen keying, mask preview, and
+spill suppression remain pending under T010-T012.
+All 85 regression tests pass at 1.5 offscreen scaling, including 22 new static
+source/UI checks and extended relocated-resource tests. Native Windows preview
+with the actual hand photo and Euclid sky passed and was visually checked;
+shutdown was clean. Syntax and whitespace checks pass. The sample is included
+in the packaging specification, but a full executable build was not run.
+
 **Plan 4.1 / REQ-004:** Add aspect-preserving crop/fit controls, a mirror toggle,
 key-color selection, tolerance, edge softness, basic green-spill suppression,
 mask preview, and Reset input settings. Preserve the current mirrored webcam
@@ -432,12 +465,13 @@ Implementation evidence below names expected future outputs, not completed work.
 | REQ-006 | 5.3, 6.1, 6.2, 7.1 | T015, T017-T020 | `LensDesktop/scene.py` snapshots; later user-approved A4 export implementation |
 | REQ-007 | 1.1, 1.2, 2.1, 5.1, 5.2, 7.1, 7.2 | T001-T004, T007, T013-T014, T016, T020-T023 | Preserved opaque desktop behavior; `README.md`; verified packaging |
 | REQ-008 | 3.1, 3.2 | T008-T009 | Post-lens placement helpers and controls; default `data` asset; all view/export integrations |
+| REQ-009 | 4.0 | T024 | Static source/cache; load/example/freeze/resume controls; raw input export; hand resource; static source/UI tests |
 
 ## Suggested delivery order
 
 1. Deliver the UI cleanup on its own and review its appearance.
 2. Deliver reliable webcam selection without changing lensing.
-3. Add sky loading and a usable greenscreen preview.
+3. Add sky loading, static calibration input, and then a usable greenscreen preview.
 4. Deliver the transparent lensing/composition pipeline and consistent exports.
 5. Complete regression checks and usage documentation.
 6. Implement the A4 page only after its instructions are supplied.

@@ -160,6 +160,32 @@ Camera**, enable camera access for desktop apps, and close other programs using
 the camera. OpenCV's automatic capture backend is used; actual backend/device
 compatibility still needs verification on your laptop.
 
+### Static input and greenscreen preparation
+
+In the **Source** group:
+
+- **Hand example** loads the supplied [greenscreen photo](data/example_gs_pic.jpeg)
+  as the input, not the sky. **Load image...** selects another local PNG/JPEG.
+  Images are decoded once, stay unmirrored, and initially use **Fit** to show the
+  whole photograph. **Fill** center-crops to fill the source canvas.
+- **Freeze input** captures the current desktop region or webcam frame and
+  switches to **Static image**. Webcam freezing releases the camera and retains
+  its mirrored, center-cropped preview. The stored pixels remain unmirrored.
+- Static mode stops live acquisition, not rendering: lens parameters, view
+  modes, sky selection, and source size/position remain adjustable.
+- Select **Desktop** or **Webcam** to resume live input. Selecting **Static image**
+  again restores the last loaded/frozen input; if none exists, a file picker opens.
+- **Save input...** saves the original input at its captured/loaded resolution,
+  before framing, mirroring, lensing, sky composition, or overlays. PNG is the
+  default and preserves calibration pixels exactly; JPEG is also available but
+  is lossy. A save snapshots the current frame before the file dialog opens.
+  This differs from **Ctrl+S**, which saves the composed, rendered scene.
+
+Cancelled dialogs and failed loads retain the previous source. Freeze/Save are
+disabled for a disconnected webcam; retry or choose another source first.
+Greenscreen removal and calibration controls are not implemented yet: this
+static workflow provides reproducible input for that next step.
+
 ### Regression checks
 
 The focused checks use the existing environment and Python's standard-library

@@ -48,8 +48,11 @@ from scipy.interpolate import RegularGridInterpolator as interp
 from scipy.ndimage import zoom
 from .qt_compat import QT_PKG, QtWidgets, QtCore, QtGui
 from .controls import SettingsPanel
-from .sources import CameraWorker, SourceError, normalize_bgr, frame_for_canvas
-from .processing import ImageError, SkyBackground, default_background_path, place_layer, unplace_point
+from .sources import CameraWorker, SourceError, StaticSource, normalize_bgr, frame_for_canvas
+from .processing import (
+    ImageError, SkyBackground, default_background_path, example_source_path,
+    place_layer, unplace_point, write_image_bgr,
+)
 
 # Set window extent
 # base_w = 600
@@ -318,6 +321,8 @@ class LensDesktop(QtWidgets.QMainWindow):
         self._last_source_error = None
         self._last_background_error = None
         self.background = SkyBackground()
+        self.static_source = StaticSource()
+        self.static_active = False
 
         self.setWindowFlags(QtCore.Qt.Window)
         central = QtWidgets.QWidget()
@@ -365,6 +370,11 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.refresh_cameras.clicked.connect(self._refresh_cameras)
         self.settings_panel.cancel_refresh.clicked.connect(self.camera_worker.cancel_discovery)
         self.settings_panel.open_camera.clicked.connect(self._open_camera_index)
+        self.settings_panel.load_input_image.clicked.connect(self._choose_input_image)
+        self.settings_panel.load_input_example.clicked.connect(self._load_input_example)
+        self.settings_panel.freeze_input.clicked.connect(self._freeze_input)
+        self.settings_panel.save_input.clicked.connect(self.save_input_image)
+        self.settings_panel.input_fitting.currentIndexChanged.connect(self.update_view)
         self.settings_panel.load_background.clicked.connect(self._choose_background)
         self.settings_panel.clear_background.clicked.connect(self._clear_background)
         self.settings_panel.default_background.clicked.connect(self._default_background)
@@ -457,12 +467,7 @@ class LensDesktop(QtWidgets.QMainWindow):
     def capture_screen_rect(self):
         rect = self._content_capture_rect_px()
         raw = self.sct.grab(rect)
-        out = np.array(raw, dtype=np.uint8)
-        out = cv2.resize(out, (self.base_w * 2, self.base_h * 2))
-        # The above resize happens because some screens return a higher resolution grab.
-        # Twice the resolution should be enough for good interpolation, so I will scale it to this for consistent output)
-        # If the screen returns a lower resolution this is still fine though.
-        return out
+        return np.array(raw, dtype=np.uint8)
 
     def HideGUI(self):
 
@@ -552,12 +557,24 @@ class LensDesktop(QtWidgets.QMainWindow):
         self._last_source_error = message if error else None
 
     def _sync_source_selector(self):
+        source = "static" if self.static_active else "webcam" if self.cam else "desktop"
         with QtCore.QSignalBlocker(self.settings_panel.source_selector):
-            self.settings_panel.source_selector.setCurrentIndex(1 if self.cam else 0)
+            selector = self.settings_panel.source_selector
+            selector.setCurrentIndex(selector.findData(source))
+        self.settings_panel.input_fitting.setEnabled(self.static_active)
+        self.settings_panel.freeze_input.setEnabled(not self.static_active and not self._camera_fault)
+        self.settings_panel.save_input.setEnabled(not self._camera_fault)
 
     def _source_changed(self):
-        if self.settings_panel.source_selector.currentData() == "desktop":
+        source = self.settings_panel.source_selector.currentData()
+        if source == "desktop":
             self._use_desktop()
+        elif source == "static":
+            self._sync_source_selector()
+            if self.static_source.frame is None:
+                self._choose_input_image()
+            else:
+                self._activate_static_source()
         elif self.selected_camera_index is not None:
             self._request_camera(self.selected_camera_index)
         else:
@@ -588,6 +605,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.camera_worker.use_desktop()
         self._pending_camera = None
         self.cam = False
+        self.static_active = False
         self.camera_token = None
         self._camera_fault = False
         self._sync_source_selector()
@@ -600,6 +618,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         self._pending_camera = None
         self.camera_token = token
         self.cam = True
+        self.static_active = False
         self._camera_fault = False
         self.selected_camera_index = index
         self.settings_panel.camera_index.setValue(index)
@@ -625,6 +644,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         if self._closing or token != self.camera_token:
             return
         self._camera_fault = True
+        self._sync_source_selector()
         self._source_status(
             f"{message} Last image is frozen. Use index / retry or select Desktop.",
             error=True,
@@ -652,7 +672,7 @@ class LensDesktop(QtWidgets.QMainWindow):
                 label = f"Camera {index}" if index in indices else f"Camera {index} (manual / previous)"
                 selector.addItem(label, index)
             selector.setCurrentIndex(max(0, selector.findData(self.selected_camera_index)))
-        if self._pending_camera is not None or self._camera_fault:
+        if self._pending_camera is not None or self._camera_fault or self.static_active:
             return
         if cancelled:
             message = "Camera scan cancelled. Partial results are listed."
@@ -665,9 +685,99 @@ class LensDesktop(QtWidgets.QMainWindow):
         self._source_status(message, error=bool(errors) or (not cancelled and not indices))
 
     def _acquire_source_frame(self):
+        if self.static_active:
+            if self.static_source.frame is None:
+                raise SourceError("No static input image is available.")
+            return self.static_source.frame
         if self.cam:
             return self.camera_worker.snapshot(self.camera_token)
         return normalize_bgr(self.capture_screen_rect())
+
+    def _activate_static_source(self):
+        self.camera_worker.use_desktop()
+        self._pending_camera = None
+        self.camera_token = None
+        self.cam = False
+        self.static_active = True
+        self._camera_fault = False
+        self._sync_source_selector()
+        frame = self.static_source.frame
+        assert frame is not None
+        name = self.static_source.path.name if self.static_source.path is not None else "frozen live frame"
+        self._source_status(f"Static input: {name} ({frame.shape[1]} x {frame.shape[0]}).")
+        self.update_view()
+
+    def _load_input_image(self, path):
+        try:
+            self.static_source.load(path)
+        except (ImageError, SourceError) as error:
+            self._source_status(str(error), error=True)
+            self._sync_source_selector()
+            return False
+        with QtCore.QSignalBlocker(self.settings_panel.input_fitting):
+            self.settings_panel.input_fitting.setCurrentIndex(0)
+        self._activate_static_source()
+        return True
+
+    def _choose_input_image(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Load static input image", str(example_source_path().parent),
+            "Image Files (*.png *.jpg *.jpeg);;All Files (*)",
+        )
+        if path:
+            self._load_input_image(path)
+        else:
+            self._sync_source_selector()
+
+    def _load_input_example(self):
+        self._load_input_image(example_source_path())
+
+    def _freeze_input(self):
+        if self._closing:
+            return
+        if self.static_active:
+            self._source_status("Input is already static; select Desktop or Webcam to resume live input.")
+            return
+        try:
+            if self._camera_fault:
+                raise SourceError("Cannot freeze a disconnected camera. Retry or select Desktop.")
+            frame = self._acquire_source_frame()
+            if frame is None:
+                raise SourceError("No live input frame is available yet. Try freezing again.")
+            self.static_source.set_frame(frame, mirror=self.cam)
+        except (SourceError, ScreenShotError, cv2.error) as error:
+            self._source_status(f"Cannot freeze input: {error}", error=True)
+            return
+        with QtCore.QSignalBlocker(self.settings_panel.input_fitting):
+            self.settings_panel.input_fitting.setCurrentIndex(1)
+        self._activate_static_source()
+
+    def save_input_image(self):
+        try:
+            if self._camera_fault:
+                raise SourceError("Cannot save a disconnected camera's input. Retry or load a static image.")
+            frame = self._acquire_source_frame()
+            if frame is None:
+                raise SourceError("No current input frame is available.")
+            frame = frame.copy()
+        except (SourceError, ScreenShotError, cv2.error) as error:
+            self._source_status(f"Cannot save input: {error}", error=True)
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save native input for calibration", "input.png",
+            "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg)",
+        )
+        if not path:
+            return
+        output = Path(path)
+        if not output.suffix:
+            output = output.with_suffix(".png")
+        try:
+            write_image_bgr(output, frame)
+        except ImageError as error:
+            self._source_status(str(error), error=True)
+            return
+        self._source_status(f"Saved native input: {output}")
 
     def _camera_worker_finished(self):
         if self._closing:
@@ -1009,8 +1119,13 @@ class LensDesktop(QtWidgets.QMainWindow):
             frame = self._acquire_source_frame()
             if frame is None:
                 return False
-            frame = frame_for_canvas(frame, self.base_w, self.base_h, camera=self.cam)
-        except (SourceError, cv2.error, ScreenShotError) as error:
+            if self.static_active:
+                frame = self.static_source.render_frame(
+                    self.base_w, self.base_h, self.settings_panel.input_fitting.currentData()
+                )
+            else:
+                frame = frame_for_canvas(frame, self.base_w, self.base_h, camera=self.cam)
+        except (SourceError, ImageError, cv2.error, ScreenShotError) as error:
             self._source_status(f"Cannot capture the input image: {error}", error=True)
             return False
 

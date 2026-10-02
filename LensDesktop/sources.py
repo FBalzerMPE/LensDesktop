@@ -2,11 +2,13 @@ from dataclasses import dataclass, field
 from itertools import count
 from queue import Empty, Queue
 from threading import Event, Lock
+from pathlib import Path
 
 import cv2
 import numpy as np
 
 from .qt_compat import QT_PKG, QtCore
+from .processing import fit_background, read_image_bgr
 
 
 Signal = QtCore.pyqtSignal if QT_PKG.startswith("PyQt") else QtCore.Signal
@@ -48,6 +50,50 @@ def frame_for_canvas(
         frame = frame[top:top + side, left:left + side]
     frame = cv2.resize(frame, (width * 2, height * 2))
     return cv2.flip(frame, 1) if camera else frame
+
+
+class StaticSource:
+    def __init__(self):
+        self.frame: np.ndarray | None = None
+        self.path: Path | None = None
+        self.mirror = False
+        self._cache_key: tuple[int, int, str] | None = None
+        self._cache: np.ndarray | None = None
+
+    def set_frame(self, frame: np.ndarray, *, mirror: bool = False, path: Path | None = None):
+        owned = normalize_bgr(frame).copy()
+        owned.setflags(write=False)
+        self.frame = owned
+        self.path = path
+        self.mirror = mirror
+        self._cache_key = None
+        self._cache = None
+
+    def load(self, path: str | Path):
+        path = Path(path)
+        self.set_frame(read_image_bgr(path), path=path)
+
+    def snapshot(self) -> np.ndarray:
+        if self.frame is None:
+            raise SourceError("No static input image is available. Load an image or freeze live input.")
+        return self.frame.copy()
+
+    def render_frame(self, width: int, height: int, mode: str) -> np.ndarray:
+        if self.frame is None:
+            raise SourceError("No static input image is available. Load an image or freeze live input.")
+        key = (width, height, mode)
+        if key != self._cache_key:
+            if self.mirror and mode == "fill":
+                image = frame_for_canvas(self.frame, width, height, camera=True)
+            else:
+                image = fit_background(self.frame, width * 2, height * 2, mode)
+                if self.mirror:
+                    image = cv2.flip(image, 1)
+            image.setflags(write=False)
+            self._cache = image
+            self._cache_key = key
+        assert self._cache is not None
+        return self._cache.copy()
 
 
 @dataclass
