@@ -26,6 +26,7 @@ class SettingsPanelTests(unittest.TestCase):
         self.exclusion_patch.start()
         self.window = desktop.LensDesktop()
         self.window.timer.stop()
+        self.window.settings_panel.lens_section.set_expanded(True)
         self.window.show()
         self.app.processEvents()
         self.window.resize(650, 400)
@@ -149,6 +150,7 @@ class SettingsPanelTests(unittest.TestCase):
         self.assertEqual(self.window.sliderb.value(), 70)
 
     def test_marker_coordinates_are_local_to_canvas(self):
+        self.window.settings_panel.source_scale.setValue(100)
         self.window.dual_checkbox.setChecked(True)
         self.app.processEvents()
         point = desktop.QtCore.QPoint(self.window.base_w + 20, 30)

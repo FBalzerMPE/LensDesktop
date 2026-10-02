@@ -22,8 +22,9 @@ and placed over the sky:
 
 ```text
 Desktop, selected webcam, or static image
-    -> crop / mirror / input adjustments
-    -> greenscreen removal: foreground color + alpha mask
+    -> optional native-resolution greenscreen removal: foreground color + alpha mask
+    -> paired input zoom / crop / mirror / framing
+    -> optional pre-lens source shrinking and Cross / Cusp / Fold positioning
     -> lens foreground color AND alpha
     -> optional lens light and source-associated explanatory overlays
     -> size / move the rendered source (AFTER lensing)
@@ -39,6 +40,8 @@ remains represented by the existing SIE model and optional lens-light overlay;
 loading a sky photograph does not derive a mass distribution from that image.
 The user confirmed that size and position controls should manipulate the
 already-lensed result, not move the input subject relative to the lens.
+The later Cross/Cusp/Fold request adds a separate, opt-in pre-lens transform;
+it does not change the meaning of those existing post-lens controls.
 
 ## Baseline and constraints
 
@@ -91,6 +94,9 @@ later implementation requirement demonstrates a need.
 | REQ-007 | Preserve existing desktop functionality and document the new Windows workflow and feature behavior. |
 | REQ-008 | Resize and move the rendered source after lensing over an unchanged sky; load the user-supplied Euclid image from `data` by default. |
 | REQ-009 | Load a static input image or freeze live input for reproducible greenscreen testing; save original calibration pixels separately from rendered-scene exports. |
+| REQ-010 | Compact collapsible controls with restrained styling; cap visible window height to the available screen; use a source-size slider defaulting/resetting to 25%. |
+| REQ-011 | Independently zoom/crop the input before lensing by a specified percentage, consistently across framing, masks, previews and exports without modifying native calibration pixels. |
+| REQ-012 | Independently shrink the input relative to the Einstein radius and select adaptive Cross/Cusp/Fold source-plane presets, with explicit finite-source/degenerate-lens limitations and safe scene exports. |
 
 ## Proposed file boundaries
 
@@ -119,6 +125,7 @@ tests/
     test_static_ui.py Static selection, freeze/resume, all views and native input saving
     test_chroma_key.py Key/matte, spill, framing, halo and actual hand-photo checks
     test_chroma_ui.py Keyed views, inverse alpha, previews, webcam transitions and exports
+    test_ui_polish.py Expanders, source default/slider, height limits and paired input zoom
 data/
     euclid_patch_example.jpg  User-supplied default sky
     example_gs_pic.jpeg       User-supplied greenscreen calibration hand photo
@@ -141,7 +148,7 @@ build configuration, and icons remain at the repository root.
 ## Implementation phases and tasks
 
 Each phase should be usable before moving to the next. Task IDs normally follow
-execution order; T024 was added later for static calibration preparation.
+execution order; T024-T026 were added later for calibration and UI refinements.
 Dependencies are stated explicitly.
 
 ### Phase 1: Readable UI first
@@ -179,6 +186,41 @@ The Qt loader was extracted to `LensDesktop/qt_compat.py` without changing bindi
 so both application and panel use the same binding. Rendering no longer resizes
 the window on every tick, as required to keep the panel outside the canvas.
 `README.md` documents this batch; T022 remains open for later feature docs.
+
+### Phase 1 follow-up: Compact controls and bounded window
+
+**Plan 1.3 / REQ-001, REQ-007, REQ-010:** After greenscreen implementation,
+refactor the growing controls into reusable keyboard-accessible expanders.
+Keep Source, Source placement and View open by default; Camera setup, Input /
+greenscreen, Sky background and Lens start closed. Preserve state/enabled controls
+when collapsed and automatically reveal camera setup when Ctrl+F needs selection.
+Keep the vertical scrollbar and native checkbox indicators. Add palette-derived
+panel/input colors, rounded borders, restrained teal accents and focus outlines.
+
+Move post-lens size/offsets into Source placement. Replace the size spin box with
+a 10-200% slider/readout, default/reset 25%, zero offsets. Bound window height
+using available screen geometry and non-client margins, update on screen/geometry/
+window-state/frame changes, and preserve native maximization. Do not make height
+fixed or require every section to be expanded.
+
+- [x] T025 [Plan:1.3] Add reusable expanders, compact grouping and styling, source-size slider/default, screen-height limits, camera-section reveal and regression coverage.
+
+**Acceptance/status:** Expansion retains controls and values; short windows scroll
+without horizontal clipping. Source size and Reset yield 25%. Normal resize and
+presentation respect the height cap. Native maximized Windows frames have invisible
+off-screen borders, so their visible DWM bounds, rather than the larger Qt frame
+rectangle, were verified against the taskbar-excluded work area at normal scaling.
+Maximize, restore and frame toggling preserve window state. A native 125% scaling
+check found maximized frameless/presentation mode extending one physical pixel
+beyond the work area (1043px versus 1042px). This minor remaining issue is deferred
+at the user's request to wrap up; no further window-behavior changes were made.
+
+The actual styled Windows UI was visually checked. All 121 regressions pass at
+1.5 offscreen scaling; focused polish tests also pass at 1.25 scaling. Syntax and
+whitespace checks pass. Physical mixed-DPI monitor movement remains a manual check.
+The user tested the UI, approved its appearance, and requested moving on after
+documentation. Remaining validation gaps are physical mixed-DPI movement,
+fractional-scale native bounds, and a full packaged executable build.
 
 ### Phase 2: Reliable input sources and webcam selection
 
@@ -271,7 +313,8 @@ Phase 4 is still needed to remove the webcam's own greenscreen background.
 **Implementation status (2026-10-02):** T008-T009 are implemented with default
 Euclid loading, PNG/JPEG selection, transactional errors/cancellation, clear/
 default actions, fit/fill cache, and source size (10-200%) and offsets (-100 to
-100% of a panel). Defaults remain full-size, centered source placement.
+100% of a panel). That batch used full-size, centered source placement;
+Plan 1.3 now changes the default/reset size to 25%, with centered placement.
 The static sky bypasses lensing; placement transforms the rendered layer's
 premultiplied color and alpha together. Forward out-of-bounds pixels and inverse
 unsampled pixels expose sky, while real black pixels stay opaque. Clearing the
@@ -363,6 +406,62 @@ All 108 regression tests pass at 1.5 offscreen scaling, including 23 new
 keying/UI checks. Native Windows dual-view preview was visually checked with
 the actual photo/Euclid sky and clean shutdown. Webcam checks use simulated
 devices; physical lighting, hair edges and spill still need hands-on calibration.
+
+### Phase 4 follow-up: Input zoom
+
+**Plan 4.3 / REQ-004, REQ-007, REQ-011:** The user selected input zoom before
+lensing, not zooming the final sky/composition. Add a 100-400% slider/readout:
+100% retains all input; 200% keeps the central half of each native input axis;
+400% keeps its central quarter. Crop color and alpha identically before fitting/
+mirroring, then render at unchanged canvas dimensions. Keep native pixels, sky,
+lens parameters/maps and post-lens placement independent. Apply the slider on
+release and reset it to 100% with input settings.
+
+- [x] T026 [Plan:4.3] Add paired central crop to shared framing, zoom controls/cache invalidation, opaque/keyed/live/static/preview integrations and regression tests.
+
+**Acceptance/status:** Exact 200% crop bounds and color/alpha correspondence are
+tested, including small images and invalid percentages. Zoomed green borders are
+cropped in all four view modes with keying on/off. Mask/source previews use zoom;
+native calibration exports remain byte-equivalent to the original decoded input.
+All 121 regressions pass at 1.5 offscreen scaling. Native hand/Euclid preview with
+150% input zoom and 25% post-lens source size was visually checked.
+
+### Phase 4 follow-up: Source relative to lens
+
+**Plan 4.4 / REQ-005, REQ-007, REQ-012:** This user-requested addition is separate
+from post-lens display placement. Add opt-in shrinking of the visible-alpha
+bounding box to 1-100% of the Einstein radius (default 10%) and exclusive
+Cross/Cusp/Fold radio buttons. Center Cross on the tangential caustic, place
+Cusp just inside its pointed end, and Fold just inside a smooth edge. Compute
+the outer image-plane critical curve using the existing softened SIE map in
+dimensionless lens-aligned coordinates, then map it into the source plane.
+Cache shape by axis ratio/core/heart mode; rotate and scale positions with lens
+angle/mass without repeating native keying. Cache static placed buffers too.
+
+Keep this feature off by default and preserve the old opaque render path.
+Placement uses paired premultiplied color/alpha, including when keying is off.
+Apply it after input zoom/framing, before forward lensing. The sky, post-lens
+placement, and native input/export remain independent. Calibration previews
+stay unplaced; inverse mode disables presets without losing the selection.
+Report absent/degenerate caustics, nearly circular lenses, zero mass, heart mode,
+empty foreground, finite-source caustic crossing, clipping and low sampling
+resolution. Invalid configured scenes must not export a stale pixmap.
+Configured sequences omit the undefined zero-mass sample with notification
+and restore the original radius; feature-off sequences retain their behavior.
+
+- [x] T027 [Plan:4.4] Implement cached caustic-derived presets and foreground placement, grouped opt-in controls/status, forward rendering/export integration, mathematical and Qt regression tests, and usage documentation.
+
+**Acceptance/status:** Six pure tests verify caustic containment, rotational
+covariance, shape dependence, explicit unsupported states, alpha/bounding-box
+placement and opaque black. Numerical lens-equation roots independently verify
+four dominant point-source images, a cusp-side trio and a close fold pair.
+Eleven Qt tests verify radio selection/reset, separate sky/post-lens state,
+native pixels/calibration export, transparent placement without keying,
+shape/static caches including failures, inverse/calibration behavior, warnings,
+snapshot validation, and positive-mass sequence output/restoration.
+All 138 regression tests pass at 1.5 offscreen scaling. Native Windows controls
+and all three presets render with the supplied keyed hand; finite photographs
+are not guaranteed to produce four distinct visible copies.
 
 ### Phase 5: Transparent lensing and consistent output
 
@@ -507,6 +606,9 @@ Implementation evidence below names expected future outputs, not completed work.
 | REQ-007 | 1.1, 1.2, 2.1, 5.1, 5.2, 7.1, 7.2 | T001-T004, T007, T013-T014, T016, T020-T023 | Preserved opaque desktop behavior; `README.md`; verified packaging |
 | REQ-008 | 3.1, 3.2 | T008-T009 | Post-lens placement helpers and controls; default `data` asset; all view/export integrations |
 | REQ-009 | 4.0 | T024 | Static source/cache; load/example/freeze/resume controls; raw input export; hand resource; static source/UI tests |
+| REQ-010 | 1.3 | T025 | Reusable expanders/styles; size slider/default; available-screen height/state hooks; polish tests |
+| REQ-011 | 4.3 | T026 | Paired zoom crop/framing; slider/cache/preview integration; native export and all-mode tests |
+| REQ-012 | 4.4 | T027 | Caustic-derived presets; alpha-aware pre-lens placement; opt-in controls/status; safe screenshots/sequences; point-source and Qt tests |
 
 ## Suggested delivery order
 

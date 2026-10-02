@@ -10,6 +10,95 @@ class ImageError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class CausticGeometry:
+    curve: np.ndarray
+    cusp: tuple[float, float]
+    fold: tuple[float, float]
+
+    def position(self, name: str) -> np.ndarray:
+        if name not in ("cross", "cusp", "fold"):
+            raise ImageError("Select Cross, Cusp, or Fold.")
+        return np.array((0, 0) if name == "cross" else getattr(self, name), np.float64)
+
+    def clearance(self, name: str) -> float:
+        return cv2.pointPolygonTest(self.curve.astype(np.float32), tuple(self.position(name)), True)
+
+
+def caustic_geometry(beta_x: np.ndarray, beta_y: np.ndarray, step: float) -> CausticGeometry:
+    dx_x, dx_y = np.gradient(beta_x, step, axis=1), np.gradient(beta_x, step, axis=0)
+    dy_x, dy_y = np.gradient(beta_y, step, axis=1), np.gradient(beta_y, step, axis=0)
+    determinant = dx_x * dy_y - dx_y * dy_x
+    contours, _ = cv2.findContours(
+        (determinant < 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE,
+    )
+    if not contours:
+        raise ImageError("No tangential caustic: reduce the lens core radius.")
+    critical = max(contours, key=cv2.contourArea).reshape(-1, 2)
+    height, width = beta_x.shape
+    if np.any(critical <= 0) or np.any(critical[:, 0] >= width - 1) or np.any(critical[:, 1] >= height - 1):
+        raise ImageError("The tangential critical curve is outside the preset sampling region.")
+    # Select the outer image-plane critical curve, not the larger radial source-plane caustic.
+    curve = np.column_stack((beta_x[critical[:, 1], critical[:, 0]], beta_y[critical[:, 1], critical[:, 0]]))
+    a, b = np.max(curve[:, 0]), np.max(curve[:, 1])
+    if min(a, b) < 0.01 or cv2.pointPolygonTest(curve.astype(np.float32), (0, 0), True) <= 0:
+        raise ImageError("The tangential caustic is too small or degenerate for distinct presets.")
+    following = np.roll(curve, -1, axis=0)
+    difference = curve[:, 0] / a - curve[:, 1] / b
+    next_difference = following[:, 0] / a - following[:, 1] / b
+    candidates = np.flatnonzero(
+        (curve[:, 0] > 0) & (curve[:, 1] > 0) & (difference * next_difference <= 0)
+        & (difference != next_difference)
+    )
+    if not candidates.size:
+        raise ImageError("Cannot identify a smooth fold segment on this caustic.")
+    index = int(candidates[0])
+    fraction = difference[index] / (difference[index] - next_difference[index])
+    fold = 0.85 * (curve[index] + fraction * (following[index] - curve[index]))
+    curve.setflags(write=False)
+    result = CausticGeometry(curve, (float(a * 0.85), 0), (float(fold[0]), float(fold[1])))
+    if result.clearance("cusp") <= 0 or result.clearance("fold") <= 0:
+        raise ImageError("Cannot place the selected presets inside the tangential caustic.")
+    return result
+
+
+def place_source(
+    color: np.ndarray, alpha: np.ndarray, einstein_radius: float,
+    size_percent: float, position: tuple[float, float],
+) -> tuple[np.ndarray, np.ndarray, float]:
+    if (
+        not np.isfinite((einstein_radius, size_percent, *position)).all()
+        or einstein_radius <= 0 or not 1 <= size_percent <= 100
+    ):
+        raise ImageError("Source placement requires positive lens mass and a size from 1% to 100%.")
+    height, width = alpha.shape
+    if height != width or width < 4 or color.shape != (height, width, 3):
+        raise ImageError("Source placement requires matching square color and alpha canvases.")
+    visible = alpha > 1 / 255
+    rows, columns = np.flatnonzero(np.any(visible, axis=1)), np.flatnonzero(np.any(visible, axis=0))
+    if not rows.size or not columns.size:
+        raise ImageError("No visible source remains. Adjust the greenscreen settings or bring the subject into view.")
+    top, bottom, left, right = rows[0], rows[-1] + 1, columns[0], columns[-1] + 1
+    color, alpha = color[top:bottom, left:right], alpha[top:bottom, left:right]
+    pixels_per_unit = width / 2 - 1
+    diameter = einstein_radius * size_percent / 100 * pixels_per_unit
+    factor = diameter / max(color.shape[:2])
+    resized_size = (max(1, round(color.shape[1] * factor)), max(1, round(color.shape[0] * factor)))
+    interpolation = cv2.INTER_AREA if factor < 1 else cv2.INTER_LINEAR
+    color = cv2.resize(color, resized_size, interpolation=interpolation)
+    alpha = cv2.resize(alpha, resized_size, interpolation=interpolation)
+    matrix = np.array(
+        [[1, 0, (position[0] + 1) * pixels_per_unit - (resized_size[0] - 1) / 2],
+         [0, 1, (position[1] + 1) * pixels_per_unit - (resized_size[1] - 1) / 2]],
+        np.float32,
+    )
+    return (
+        cv2.warpAffine(color, matrix, (width, height), flags=cv2.INTER_LINEAR),
+        cv2.warpAffine(alpha, matrix, (width, height), flags=cv2.INTER_LINEAR),
+        diameter,
+    )
+
+
+@dataclass(frozen=True)
 class ChromaKeySettings:
     enabled: bool = False
     color: tuple[int, int, int] = (0, 255, 128)
@@ -66,12 +155,20 @@ def chroma_key(frame: np.ndarray, settings: ChromaKeySettings) -> tuple[np.ndarr
 
 def fit_layer(
     color: np.ndarray, alpha: np.ndarray, width: int, height: int, mode: str,
-    *, mirror: bool = False,
+    *, mirror: bool = False, zoom: float = 100,
 ) -> tuple[np.ndarray, np.ndarray]:
     if width <= 0 or height <= 0 or mode not in ("fit", "fill", "stretch"):
         raise ImageError("Input framing requires positive dimensions and fit/fill/stretch mode.")
     if alpha.ndim != 2 or alpha.size == 0 or color.shape != (*alpha.shape, 3):
         raise ImageError("Input color and alpha dimensions must agree.")
+    if not np.isfinite(zoom) or not 100 <= zoom <= 400:
+        raise ImageError("Input zoom must be between 100% and 400%.")
+    if zoom != 100:
+        source_h, source_w = alpha.shape
+        crop_w, crop_h = max(1, round(source_w * 100 / zoom)), max(1, round(source_h * 100 / zoom))
+        left, top = (source_w - crop_w) // 2, (source_h - crop_h) // 2
+        color = color[top:top + crop_h, left:left + crop_w]
+        alpha = alpha[top:top + crop_h, left:left + crop_w]
     source_h, source_w = alpha.shape
     if mode == "stretch":
         resized_w, resized_h = width, height

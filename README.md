@@ -81,8 +81,26 @@ The PyInstaller specification and icons remain at the repository root.
 ## Controls
 
 View toggles and lens sliders are grouped in a settings panel beside the image.
-The panel uses native Qt controls and scrolls when the window is short.
+Related controls are grouped in keyboard-accessible expanders, with a restrained
+teal accent and rounded panels. Source, Source placement, and View start open;
+Camera setup, Input / greenscreen, Source relative to lens, Sky background, and
+Lens start collapsed.
+Click a section header to expand/collapse it; values and enabled states are
+retained. Ctrl+F opens the required camera sections when selection is needed.
+The panel scrolls vertically when the window is short.
 Mask Radius is shown only in De-lensing mode.
+
+Window height is capped to the current screen's available height, including
+title bar/borders and excluding the taskbar. The cap updates when the window
+changes screens, available screen geometry changes, maximize/restore changes the
+frame margins, or Ctrl+V toggles the frame. Native maximization is retained.
+This is a maximum, not a fixed window height; shorter windows remain supported.
+
+**Known display-scaling limitation:** On Windows at 125% scaling, maximized
+frameless/presentation mode can extend one physical pixel into the taskbar work
+area. Normal-scale maximize/restore and presentation checks passed. Physical
+mixed-DPI monitor movement still needs verification; this minor fractional-scale
+edge case is deferred rather than changing otherwise satisfactory window behavior.
 
 The image remains square (two squares in Dual view) and fits in the available
 canvas area. Extra space is left around it instead of stretching the image.
@@ -108,10 +126,11 @@ In **Sky background**:
   bundled Euclid image.
 - **Fill** preserves aspect ratio and crops the center to fill the canvas.
   **Fit** preserves the whole sky image and adds black margins.
-- **Source size** scales the rendered source from 10% to 200% of a panel.
+- In **Source placement**, the **Source size** slider scales the rendered source
+  from 10% to 200% of a panel, with a percentage readout. The default is **25%**.
   **Horizontal offset** and **Vertical offset** shift it by a percentage of the
   panel width/height (positive values move right/down).
-- **Reset source placement** restores size 100% and zero offsets.
+- **Reset source placement** restores size 25% and zero offsets.
 
 Placement is applied **after lensing**, including the source's curves/markers
 and optional lens-light overlay. It does not move the lens relative to the input,
@@ -119,10 +138,51 @@ recompute the lens maps, or lens the sky. In Dual view, the same placement and
 unchanged sky are used in both panels. Screenshots and sequences export the
 composed scene, without controls.
 
-The sky is decoded once and its fitted version is cached. At the default 100%
-source size, an opaque webcam/desktop image may cover most of it; try 50-60% to
-see the sky around the source. The webcam's own background remains opaque unless **Remove greenscreen** is
+The sky is decoded once and its fitted version is cached. The default 25% size
+leaves room to see the surrounding sky; increase the slider for a larger subject.
+The webcam's own background remains opaque unless **Remove greenscreen** is
 enabled. Black subject pixels are not treated as transparency.
+
+### Cross, Cusp, and Fold configurations
+
+Open **Source relative to lens** and enable **Place input before lensing**.
+This is opt-in: leaving it off preserves the existing rendering.
+
+- **Input size** sets the longest visible source extent to 1-100% of the
+  Einstein radius, defaulting to **10%**. The visible-alpha bounding box is
+  trimmed and centered; without greenscreen removal, the whole image rectangle
+  is the subject. Black pixels remain opaque.
+- **Cross** centers the subject inside the tangential caustic.
+- **Cusp** places it just inside a pointed caustic end, bringing three dominant
+  images together on one side.
+- **Fold** places it just inside a smooth caustic edge, bringing two images
+  close together.
+- Preset positions follow axis ratio, core radius, position angle, and lens
+  mass. **Reset pre-lens setup** turns placement off and restores Cross / 10%.
+
+These controls change the input **before lensing**. Input zoom still crops the
+original subject first; **Source placement** still scales/moves the resulting
+lensed image afterwards. Neither operation lenses the sky or modifies saved
+native calibration pixels.
+
+For testing, load **Hand example**, enable **Remove greenscreen**, and select
+**Composed scene**. Start with Cross; for Cusp/Fold, try a smaller Input size
+(1-3%) and increase the post-lens Source size to inspect the result. **Dual view**
+shows the positioned source and its lensed counterpart.
+
+An extended photograph may cross a caustic or merge into arcs rather than show
+four separate copies. The status warns about excessive source extent, low
+source sampling resolution, and clipping. High lens mass can also push images
+outside the displayed field; reduce mass if necessary. Nearly circular lenses,
+cores without a usable tangential caustic, zero mass, and heart mode are
+reported explicitly; the last image stays visible but cannot be exported as a
+new configured scene.
+
+Presets apply only to forward lensing: De-lensing disables them while retaining
+the selection. Source/mask calibration previews remain unplaced. Ctrl+S
+validates and redraws an active configuration before saving. Configuration
+sequences omit the undefined zero-mass sample (159 positive-mass frames instead
+of the usual 160) and restore the selected lens settings afterwards.
 
 ### Selecting a webcam
 
@@ -187,11 +247,11 @@ This static workflow provides reproducible input for greenscreen calibration.
 ### Greenscreen removal
 
 1. Load **Hand example**, freeze a live frame, or select your webcam.
-2. In **Greenscreen / input**, enable **Remove greenscreen**. It is off by
+2. Expand **Input / greenscreen** and enable **Remove greenscreen**. It is off by
    default, so existing opaque desktop/webcam behavior remains unchanged.
 3. Select **Alpha mask** under **Preview** to calibrate: white is retained,
    black is removed, and gray is a partially transparent edge. **Original source**
-   shows the framed/mirrored image without keying, lensing, sky, or overlays.
+   shows the framed/mirrored/zoomed image without keying, lensing, sky, or overlays.
 4. Return to **Composed scene** to see the keyed subject over the sky. Dual view
    shows the keyed original on the left and the lensed result on the right.
 
@@ -215,8 +275,13 @@ subject colors matching the selected screen can also be removed.
 - **Mirror** can override source defaults. Loaded photos/desktop are unmirrored;
   live or frozen webcam input is mirrored by default. Color and mask always use
   identical framing and mirroring.
+- **Input zoom** center-crops the input **before lensing**, independently of
+  Source size. **100%** is unchanged, **200%** keeps the central half of each
+  input axis, and **400%** keeps the central quarter. It ranges from 100-400%,
+  keeps the canvas dimensions unchanged, and applies when the slider is released.
+  The sky and lens maps do not zoom. Color and alpha use the same crop.
 - **Reset input settings** disables keying, restores the above key defaults,
-  source-default framing/mirroring and Composed scene preview. It retains the
+  source-default framing/mirroring, 100% input zoom and Composed scene preview. It retains the
   source and lens/sky settings, restoring Fit for loaded photos and Fill for
   frozen input.
 

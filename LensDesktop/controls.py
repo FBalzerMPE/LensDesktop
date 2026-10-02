@@ -1,5 +1,35 @@
-from .qt_compat import QtCore, QtWidgets
+from .qt_compat import QtCore, QtGui, QtWidgets
 from .processing import ChromaKeySettings
+
+
+class CollapsibleSection(QtWidgets.QWidget):
+    def __init__(self, title, *, expanded=False, parent=None):
+        super().__init__(parent)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self.header = QtWidgets.QToolButton()
+        self.header.setObjectName("sectionHeader")
+        self.header.setText(title)
+        self.header.setAccessibleName(title)
+        self.header.setCheckable(True)
+        self.header.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self.header.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.body = QtWidgets.QFrame()
+        self.body.setObjectName("sectionBody")
+        self.body_layout = QtWidgets.QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(12, 10, 12, 10)
+        self.body_layout.setSpacing(8)
+        layout.addWidget(self.header)
+        layout.addWidget(self.body)
+        self.header.toggled.connect(self.set_expanded)
+        self.set_expanded(expanded)
+
+    def set_expanded(self, expanded):
+        with QtCore.QSignalBlocker(self.header):
+            self.header.setChecked(expanded)
+        self.header.setArrowType(QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow)
+        self.body.setVisible(expanded)
 
 
 class SettingsPanel(QtWidgets.QScrollArea):
@@ -8,14 +38,16 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.setWidgetResizable(True)
         self.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setObjectName("settingsPanel")
 
         content = QtWidgets.QWidget()
+        content.setObjectName("settingsContent")
         layout = QtWidgets.QVBoxLayout(content)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(16)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
-        source_group = QtWidgets.QGroupBox("Source")
-        source_layout = QtWidgets.QVBoxLayout(source_group)
+        self.source_section = CollapsibleSection("Source", expanded=True)
+        source_layout = self.source_section.body_layout
         self.source_selector = QtWidgets.QComboBox()
         self.source_selector.addItem("Desktop", "desktop")
         self.source_selector.addItem("Webcam", "webcam")
@@ -25,7 +57,9 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.camera_selector = QtWidgets.QComboBox()
         self.camera_selector.addItem("Select a camera...", None)
         self.camera_selector.setAccessibleName("Camera")
-        source_layout.addWidget(self.camera_selector)
+        self.camera_section = CollapsibleSection("Camera setup")
+        camera_layout = self.camera_section.body_layout
+        camera_layout.addWidget(self.camera_selector)
         discovery_row = QtWidgets.QHBoxLayout()
         self.refresh_cameras = QtWidgets.QPushButton("Refresh")
         self.refresh_cameras.setToolTip("Probe camera indices 0 to 4.")
@@ -33,7 +67,7 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.cancel_refresh.setEnabled(False)
         discovery_row.addWidget(self.refresh_cameras)
         discovery_row.addWidget(self.cancel_refresh)
-        source_layout.addLayout(discovery_row)
+        camera_layout.addLayout(discovery_row)
         index_row = QtWidgets.QHBoxLayout()
         index_label = QtWidgets.QLabel("Camera index")
         self.camera_index = QtWidgets.QSpinBox()
@@ -42,9 +76,10 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.camera_index.setAccessibleName("Manual camera index")
         index_row.addWidget(index_label)
         index_row.addWidget(self.camera_index)
-        source_layout.addLayout(index_row)
+        camera_layout.addLayout(index_row)
         self.open_camera = QtWidgets.QPushButton("Use index / retry")
-        source_layout.addWidget(self.open_camera)
+        camera_layout.addWidget(self.open_camera)
+        source_layout.addWidget(self.camera_section)
         static_buttons = QtWidgets.QHBoxLayout()
         self.load_input_image = QtWidgets.QPushButton("Load image...")
         self.load_input_example = QtWidgets.QPushButton("Hand example")
@@ -73,10 +108,10 @@ class SettingsPanel(QtWidgets.QScrollArea):
             QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred
         )
         source_layout.addWidget(self.source_status)
-        layout.addWidget(source_group)
+        layout.addWidget(self.source_section)
 
-        input_group = QtWidgets.QGroupBox("Greenscreen / input")
-        input_layout = QtWidgets.QVBoxLayout(input_group)
+        self.input_section = CollapsibleSection("Input / greenscreen")
+        input_layout = self.input_section.body_layout
         self.key_enabled = QtWidgets.QCheckBox("Remove greenscreen")
         input_layout.addWidget(self.key_enabled)
         defaults = ChromaKeySettings()
@@ -126,13 +161,66 @@ class SettingsPanel(QtWidgets.QScrollArea):
         ):
             control.setAccessibleName(title)
             framing_form.addRow(title, control)
+        self.input_zoom = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.input_zoom.setRange(100, 400)
+        self.input_zoom.setValue(100)
+        self.input_zoom.setSingleStep(5)
+        self.input_zoom.setPageStep(25)
+        self.input_zoom.setTracking(False)
+        self.input_zoom.setAccessibleName("Input zoom")
+        self.input_zoom.setToolTip(
+            "Center crop before lensing: 100% keeps the whole input; 200% keeps half of each axis. Applied on release."
+        )
+        zoom_row, self.input_zoom_value = self._percentage_row(self.input_zoom)
+        framing_form.addRow("Input zoom", zoom_row)
         input_layout.addLayout(framing_form)
         self.reset_input = QtWidgets.QPushButton("Reset input settings")
         input_layout.addWidget(self.reset_input)
-        layout.addWidget(input_group)
+        layout.addWidget(self.input_section)
 
-        background_group = QtWidgets.QGroupBox("Sky background")
-        background_layout = QtWidgets.QVBoxLayout(background_group)
+        self.configuration_section = CollapsibleSection("Source relative to lens")
+        configuration_layout = self.configuration_section.body_layout
+        self.configuration_enabled = QtWidgets.QCheckBox("Place input before lensing")
+        configuration_layout.addWidget(self.configuration_enabled)
+        size_form = QtWidgets.QFormLayout()
+        self.configuration_size = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.configuration_size.setRange(1, 100)
+        self.configuration_size.setValue(10)
+        self.configuration_size.setTracking(False)
+        self.configuration_size.setAccessibleName("Pre-lens input size")
+        self.configuration_size.setToolTip(
+            "Longest visible source extent as a percentage of the Einstein radius. "
+            "Transparent margins are trimmed and the subject is centered before placement."
+        )
+        size_row, self.configuration_size_value = self._percentage_row(self.configuration_size)
+        size_form.addRow("Input size", size_row)
+        configuration_layout.addLayout(size_form)
+        presets = QtWidgets.QHBoxLayout()
+        self.configuration_group = QtWidgets.QButtonGroup(self)
+        self.configuration_buttons = {}
+        for index, (name, title) in enumerate((("cross", "Cross"), ("cusp", "Cusp"), ("fold", "Fold"))):
+            button = QtWidgets.QRadioButton(title)
+            self.configuration_group.addButton(button, index)
+            self.configuration_buttons[name] = button
+            presets.addWidget(button)
+        self.configuration_buttons["cross"].setChecked(True)
+        configuration_layout.addLayout(presets)
+        self.configuration_status = QtWidgets.QLabel(
+            "Off: original input framing. Source placement below changes only the rendered result."
+        )
+        self.configuration_status.setWordWrap(True)
+        self.configuration_status.setTextFormat(QtCore.Qt.PlainText)
+        self.configuration_status.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred,
+        )
+        configuration_layout.addWidget(self.configuration_status)
+        self.reset_configuration = QtWidgets.QPushButton("Reset pre-lens setup")
+        configuration_layout.addWidget(self.reset_configuration)
+        self.set_configuration_controls_enabled(False)
+        layout.addWidget(self.configuration_section)
+
+        self.background_section = CollapsibleSection("Sky background")
+        background_layout = self.background_section.body_layout
         background_buttons = QtWidgets.QHBoxLayout()
         self.load_background = QtWidgets.QPushButton("Load...")
         self.clear_background = QtWidgets.QPushButton("Clear")
@@ -152,9 +240,20 @@ class SettingsPanel(QtWidgets.QScrollArea):
             QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred
         )
         background_layout.addWidget(self.background_status)
+        layout.addWidget(self.background_section)
+        self.placement_section = CollapsibleSection("Source placement", expanded=True)
+        placement_layout = self.placement_section.body_layout
         placement = QtWidgets.QFormLayout()
+        self.source_scale = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.source_scale.setRange(10, 200)
+        self.source_scale.setValue(25)
+        self.source_scale.setSingleStep(5)
+        self.source_scale.setPageStep(25)
+        self.source_scale.setAccessibleName("Source size")
+        self.source_scale.setToolTip("Size of the rendered source after lensing, relative to each image panel.")
+        scale_row, self.source_scale_value = self._percentage_row(self.source_scale)
+        placement.addRow("Source size", scale_row)
         for name, title, minimum, maximum, value in (
-            ("source_scale", "Source size", 10, 200, 100),
             ("source_offset_x", "Horizontal offset", -100, 100, 0),
             ("source_offset_y", "Vertical offset", -100, 100, 0),
         ):
@@ -167,29 +266,30 @@ class SettingsPanel(QtWidgets.QScrollArea):
             control.setToolTip("Applied after lensing, relative to each image panel.")
             setattr(self, name, control)
             placement.addRow(title, control)
-        background_layout.addLayout(placement)
+        placement_layout.addLayout(placement)
         self.reset_placement = QtWidgets.QPushButton("Reset source placement")
-        background_layout.addWidget(self.reset_placement)
-        layout.addWidget(background_group)
+        placement_layout.addWidget(self.reset_placement)
+        layout.addWidget(self.placement_section)
 
-        view_group = QtWidgets.QGroupBox("View")
-        view_layout = QtWidgets.QVBoxLayout(view_group)
+        self.view_section = CollapsibleSection("View", expanded=True)
+        view_layout = QtWidgets.QGridLayout()
         view_layout.setSpacing(8)
         self.critical_checkbox = QtWidgets.QCheckBox("Critical Curve")
         self.dual_checkbox = QtWidgets.QCheckBox("Dual view")
         self.inverse_checkbox = QtWidgets.QCheckBox("De-lensing")
         self.lenslight_checkbox = QtWidgets.QCheckBox("Lens Light")
-        for checkbox in (
+        for index, checkbox in enumerate((
             self.critical_checkbox,
             self.dual_checkbox,
             self.inverse_checkbox,
             self.lenslight_checkbox,
-        ):
-            view_layout.addWidget(checkbox)
-        layout.addWidget(view_group)
+        )):
+            view_layout.addWidget(checkbox, index // 2, index % 2)
+        self.view_section.body_layout.addLayout(view_layout)
+        layout.addWidget(self.view_section)
 
-        lens_group = QtWidgets.QGroupBox("Lens")
-        lens_layout = QtWidgets.QVBoxLayout(lens_group)
+        self.lens_section = CollapsibleSection("Lens")
+        lens_layout = self.lens_section.body_layout
         lens_layout.setSpacing(12)
         for slider_name, label_name, title, value in (
             ("sliderb", "labelb", "Einstein Radius", 65),
@@ -216,17 +316,92 @@ class SettingsPanel(QtWidgets.QScrollArea):
             if slider_name == "slider_mask":
                 self.mask_controls = row
         self.set_inverse_mode(False)
-        layout.addWidget(lens_group)
+        layout.addWidget(self.lens_section)
 
         hint = QtWidgets.QLabel("Ctrl+V: hide/show controls")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         layout.addStretch()
+        self.sections = (
+            self.source_section, self.input_section, self.background_section,
+            self.configuration_section, self.placement_section, self.view_section, self.lens_section,
+        )
         self.setWidget(content)
+        self._apply_style()
+        self.ensurePolished()
         scrollbar_width = self.style().pixelMetric(
             QtWidgets.QStyle.PM_ScrollBarExtent
         )
-        self.setFixedWidth(max(240, content.sizeHint().width() + scrollbar_width))
+        body_width = max(section.body.sizeHint().width() for section in self.sections)
+        self.setFixedWidth(max(320, body_width + 24 + scrollbar_width))
+
+    @staticmethod
+    def _percentage_row(slider):
+        row = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        readout = QtWidgets.QLabel(f"{slider.value()}%")
+        readout.setObjectName("percentageReadout")
+        readout.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        readout.setMinimumWidth(44)
+        slider.valueChanged.connect(lambda value: readout.setText(f"{value}%"))
+        slider.sliderMoved.connect(lambda value: readout.setText(f"{value}%"))
+        layout.addWidget(slider, 1)
+        layout.addWidget(readout)
+        return row, readout
+
+    def update_percentage_labels(self):
+        self.source_scale_value.setText(f"{self.source_scale.value()}%")
+        self.input_zoom_value.setText(f"{self.input_zoom.value()}%")
+        self.configuration_size_value.setText(f"{self.configuration_size.value()}%")
+
+    def selected_configuration(self):
+        return next(name for name, button in self.configuration_buttons.items() if button.isChecked())
+
+    def set_configuration_controls_enabled(self, enabled):
+        self.configuration_size.setEnabled(enabled)
+        for button in self.configuration_buttons.values():
+            button.setEnabled(enabled)
+
+    def _apply_style(self):
+        palette = self.palette()
+        window = palette.color(QtGui.QPalette.Window).name()
+        base = palette.color(QtGui.QPalette.Base).name()
+        text = palette.color(QtGui.QPalette.Text).name()
+        border = palette.color(QtGui.QPalette.Mid).name()
+        disabled = palette.color(QtGui.QPalette.Disabled, QtGui.QPalette.Text).name()
+        accent = "#237679" if palette.color(QtGui.QPalette.Window).lightness() > 128 else "#64c2c4"
+        self.setStyleSheet(f"""
+            QScrollArea#settingsPanel, QWidget#settingsContent {{ background: {window}; }}
+            QFrame#sectionBody {{ background: {base}; border: 1px solid {border}; border-radius: 8px; }}
+            QToolButton#sectionHeader {{
+                color: {text}; background: transparent; border: 1px solid transparent; border-radius: 6px;
+                padding: 8px; text-align: left; font-weight: 600;
+            }}
+            QToolButton#sectionHeader:hover, QToolButton#sectionHeader:checked {{
+                background: rgba(49, 143, 145, 25);
+            }}
+            QToolButton#sectionHeader:focus {{ border-color: {accent}; }}
+            QPushButton, QComboBox, QSpinBox {{
+                color: {text}; border: 1px solid {border}; border-radius: 5px; padding: 4px 6px;
+            }}
+            QComboBox, QSpinBox {{ background: {base}; }}
+            QPushButton:hover {{ border-color: {accent}; }}
+            QPushButton:disabled, QComboBox:disabled, QSpinBox:disabled {{ color: {disabled}; }}
+            QPushButton:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {accent}; }}
+            QLabel#percentageReadout {{ color: {accent}; }}
+            QSlider {{ border: 1px solid transparent; }}
+            QSlider::groove:horizontal {{ height: 5px; background: {border}; border-radius: 2px; }}
+            QSlider::sub-page:horizontal {{ background: {accent}; border-radius: 2px; }}
+            QSlider::handle:horizontal {{
+                width: 14px; margin: -5px 0; background: {accent}; border-radius: 7px;
+            }}
+            QSlider:focus {{ border-color: {accent}; background: rgba(49, 143, 145, 15); }}
+            QScrollBar:vertical {{ width: 10px; background: {window}; }}
+            QScrollBar::handle:vertical {{ background: {border}; min-height: 24px; border-radius: 5px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+        """)
 
     def chroma_settings(self):
         return ChromaKeySettings(

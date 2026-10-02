@@ -98,7 +98,7 @@ class BackgroundIntegrationTests(unittest.TestCase):
         panel.source_offset_x.setValue(-25)
         panel.source_offset_y.setValue(30)
         panel.reset_placement.click()
-        self.assertEqual(self.window._source_placement(), (1.0, 0.0, 0.0))
+        self.assertEqual(self.window._source_placement(), (0.25, 0.0, 0.0))
 
     def test_bad_load_and_cancel_preserve_last_valid_background(self):
         previous = self.window.background.image
