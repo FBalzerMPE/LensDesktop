@@ -85,6 +85,7 @@ class CameraIntegrationTests(unittest.TestCase):
         self.assertEqual(self.window.selected_camera_index, 0)
 
     def test_camera_colors_and_all_view_modes(self):
+        self.window._clear_background()
         self.open_camera()
         for dual in (False, True):
             self.window.dual_checkbox.setChecked(dual)

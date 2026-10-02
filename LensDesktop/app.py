@@ -43,11 +43,13 @@ import cv2
 import mss
 from mss.exception import ScreenShotError
 from functools import partial
+from pathlib import Path
 from scipy.interpolate import RegularGridInterpolator as interp
 from scipy.ndimage import zoom
 from .qt_compat import QT_PKG, QtWidgets, QtCore, QtGui
 from .controls import SettingsPanel
 from .sources import CameraWorker, SourceError, normalize_bgr, frame_for_canvas
+from .processing import ImageError, SkyBackground, default_background_path, place_layer, unplace_point
 
 # Set window extent
 # base_w = 600
@@ -103,6 +105,8 @@ def SIE_defl(xx, yy, t, s, heart, q, b):
     ct, st = np.cos(t), np.sin(t)
     xv, yv = ct * xx - st * yy, st * xx + ct * yy
     r = np.sqrt(q * q * (xv * xv + s * s) + yv * yv)
+    if b == 0:
+        return np.zeros_like(xx), np.zeros_like(yy), r
     fac = 1.0
     if heart:
         fac = heart_shape(xv, yv)
@@ -159,7 +163,7 @@ def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False):
     )
 
 
-def inverse_remap_image(lensed_img, x_idx, y_idx, mask_radius, base_w, base_h):
+def inverse_remap_image(lensed_img, x_idx, y_idx, mask_radius, base_w, base_h, *, return_alpha=False):
     """
     Optimized inverse remapping using flat indexing and manual filling of the 2D histogram
     that becomes the reconstructed source. When precomputed for fixed parameters, it is possible
@@ -202,6 +206,7 @@ def inverse_remap_image(lensed_img, x_idx, y_idx, mask_radius, base_w, base_h):
 
     # Avoid division by zero
     mask = count == 0
+    coverage = (~mask).reshape(h, w).astype(np.float32) if return_alpha else None
 
     if flat_img.size == 0:
         mean_color = np.array([0, 0, 0])
@@ -212,6 +217,9 @@ def inverse_remap_image(lensed_img, x_idx, y_idx, mask_radius, base_w, base_h):
     inv_img[mask] = mean_color
 
     inv_img = (inv_img / count[:, None]).reshape(h, w, 3).astype(np.uint8)
+    if return_alpha:
+        assert coverage is not None
+        return inv_img, coverage
     return inv_img
 
 
@@ -308,6 +316,8 @@ class LensDesktop(QtWidgets.QMainWindow):
         self._discovery_token = None
         self._camera_fault = False
         self._last_source_error = None
+        self._last_background_error = None
+        self.background = SkyBackground()
 
         self.setWindowFlags(QtCore.Qt.Window)
         central = QtWidgets.QWidget()
@@ -355,6 +365,17 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.refresh_cameras.clicked.connect(self._refresh_cameras)
         self.settings_panel.cancel_refresh.clicked.connect(self.camera_worker.cancel_discovery)
         self.settings_panel.open_camera.clicked.connect(self._open_camera_index)
+        self.settings_panel.load_background.clicked.connect(self._choose_background)
+        self.settings_panel.clear_background.clicked.connect(self._clear_background)
+        self.settings_panel.default_background.clicked.connect(self._default_background)
+        self.settings_panel.background_mode.currentIndexChanged.connect(self.update_view)
+        for control in (
+            self.settings_panel.source_scale,
+            self.settings_panel.source_offset_x,
+            self.settings_panel.source_offset_y,
+        ):
+            control.valueChanged.connect(self.update_view)
+        self.settings_panel.reset_placement.clicked.connect(self._reset_source_placement)
 
         # Timer for view updates.
         self.timer = QtCore.QTimer(self)
@@ -413,6 +434,7 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         # try OS-level exclusion
         self.excluded = exclude_from_capture(self)
+        self._default_background()
         self._ready = True
         available = self.screen().availableGeometry()
         self.resize(
@@ -651,6 +673,104 @@ class LensDesktop(QtWidgets.QMainWindow):
         if self._closing:
             self.close()
 
+    def _background_status(self, message, *, error=False):
+        self.settings_panel.background_status.setText(message)
+        if error:
+            self.statusBar().showMessage(message)
+            print(f"[error] {message}", file=sys.stderr)
+            self._last_background_error = message
+        elif self._last_background_error is not None:
+            if self.statusBar().currentMessage() == self._last_background_error:
+                self.statusBar().clearMessage()
+            self._last_background_error = None
+
+    def _load_background(self, path):
+        try:
+            self.background.load(path)
+        except ImageError as error:
+            self._background_status(str(error), error=True)
+            return False
+        assert self.background.path is not None
+        self._background_status(f"Sky: {self.background.path.name}")
+        self.update_view()
+        return True
+
+    def _choose_background(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Load sky background", "",
+            "Image Files (*.png *.jpg *.jpeg);;All Files (*)",
+        )
+        if path:
+            self._load_background(path)
+
+    def _default_background(self):
+        self._load_background(default_background_path())
+
+    def _clear_background(self):
+        self.background.clear()
+        self._background_status("No sky image: black backdrop.")
+        self.update_view()
+
+    def _source_placement(self):
+        panel = self.settings_panel
+        return (
+            panel.source_scale.value() / 100,
+            panel.source_offset_x.value() / 100,
+            panel.source_offset_y.value() / 100,
+        )
+
+    def _reset_source_placement(self):
+        panel = self.settings_panel
+        with (
+            QtCore.QSignalBlocker(panel.source_scale),
+            QtCore.QSignalBlocker(panel.source_offset_x),
+            QtCore.QSignalBlocker(panel.source_offset_y),
+        ):
+            panel.source_scale.setValue(100)
+            panel.source_offset_x.setValue(0)
+            panel.source_offset_y.setValue(0)
+        self.update_view()
+
+    def _compose_layer(self, rgb, alpha):
+        background = self.background.fitted(
+            self.base_w, self.base_h, self.settings_panel.background_mode.currentData()
+        )
+        scale, x, y = self._source_placement()
+        return place_layer(rgb, alpha, background, scale=scale, x=x, y=y)
+
+    def _forward_layer(self, img_bgr):
+        Lx = 2 * self.base_w / max(self.base_w, self.base_h)
+        Ly = 2 * self.base_h / max(self.base_w, self.base_h)
+        map_x = self.map_x * 2 / Lx
+        map_y = self.map_y * 2 / Ly
+        color = cv2.remap(
+            img_bgr, map_x, map_y, interpolation=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_CONSTANT,
+        )
+        if self.background.image is None:
+            alpha = np.ones((self.base_h, self.base_w), np.float32)
+        else:
+            alpha = cv2.remap(
+                np.ones(img_bgr.shape[:2], np.float32), map_x, map_y,
+                interpolation=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT,
+            )
+            alpha = np.clip(alpha, 0, 1)
+        rgb = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+        if self.lenslight_checkbox.isChecked():
+            rgb = draw_lens_light(
+                self.b_value, self.kappa, rgb, base_w=self.base_w, base_h=self.base_h
+            )
+            if self.b_value > 0:
+                light_alpha = np.clip(np.log10(1 + self.kappa), 0, 1)
+                alpha = alpha * (1 - light_alpha) + light_alpha
+        return rgb, alpha
+
+    def _inverse_layer(self, rgb):
+        if self.background.image is None:
+            return self.inv_map(rgb), np.ones((self.base_h, self.base_w), np.float32)
+        image, alpha = self.inv_map(rgb, return_alpha=True)
+        return image * alpha[..., None], alpha
+
     def update_lensed_map(self):
 
         self.map_x, self.map_y, self.deflxv, self.deflyv, _, _, self.kappa = (
@@ -808,15 +928,19 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     # Functions for critical curves and caustics:
 
-    def get_critical(self, SIE_map_rgb):
+    def get_critical(self, SIE_map_rgb, alpha=None):
         cv2.drawContours(SIE_map_rgb, self.contours, -1, (255, 255, 255), 5)
         cv2.drawContours(SIE_map_rgb, self.contours, -1, (0, 0, 0), 2)
+        if alpha is not None:
+            cv2.drawContours(alpha, self.contours, -1, 1.0, 5)
         return self.contours
 
-    def get_caustics(self, img_unlensed, contours):
+    def get_caustics(self, img_unlensed, contours, alpha=None):
 
         cv2.drawContours(img_unlensed, self.caustic_curves, -1, (255, 255, 255), 5)
         cv2.drawContours(img_unlensed, self.caustic_curves, -1, (0, 0, 0), 2)
+        if alpha is not None:
+            cv2.drawContours(alpha, self.caustic_curves, -1, 1.0, 5)
 
     def save_screenshot(self):
         original_pixmap = self.label.pixmap()
@@ -833,8 +957,8 @@ class LensDesktop(QtWidgets.QMainWindow):
             "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg);;All Files (*)",
         )
 
-        if file_path:
-            pixmap.save(file_path)
+        if file_path and not pixmap.save(file_path):
+            self._background_status(f"Cannot save image to {file_path}. Check permissions and file format.", error=True)
 
         gc.collect()
 
@@ -847,25 +971,26 @@ class LensDesktop(QtWidgets.QMainWindow):
             "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg);;All Files (*)",
         )
 
+        if not file_path:
+            return
+        path = Path(file_path)
         b0 = self.b_value
-        K = 160
-        brange = np.linspace(0, b0, K)
-
-        for i in range(K):
-            self.b_value = brange[i]
-            self.inv_map = partial(
-                inverse_remap_image,
-                x_idx=self.x_idx,
-                y_idx=self.y_idx,
-                mask_radius=self.mask_radius,
-            )
-            self.update_lensed_map()
+        try:
+            for i, radius in enumerate(np.linspace(0, b0, 160)):
+                self.b_value = float(radius)
+                self.update_mask(self.slider_mask.value())
+                if not self.update_view():
+                    self._background_status("Sequence export stopped: no current input image available.", error=True)
+                    break
+                pixmap = self.label.pixmap().copy()
+                output = path.with_name(f"{path.stem}_{i:04d}{path.suffix}")
+                if not pixmap.save(str(output)):
+                    self._background_status(f"Cannot save sequence image to {output}.", error=True)
+                    break
+        finally:
+            self.b_value = b0
+            self.update_mask(self.slider_mask.value())
             self.update_view()
-            original_pixmap = self.label.pixmap()
-            pixmap = original_pixmap.copy()  # Prevents RuntimeError
-
-            if file_path:
-                pixmap.save(file_path[:-4] + f"_{i:04d}.png")
 
         gc.collect()
 
@@ -875,19 +1000,19 @@ class LensDesktop(QtWidgets.QMainWindow):
     def update_view(self):
 
         if not self._ready:
-            return
+            return False
         gc.collect()
         self.set_Geometry_sliders_and_labels()
         if self._camera_fault or self._closing:
-            return
+            return False
         try:
             frame = self._acquire_source_frame()
             if frame is None:
-                return
+                return False
             frame = frame_for_canvas(frame, self.base_w, self.base_h, camera=self.cam)
         except (SourceError, cv2.error, ScreenShotError) as error:
             self._source_status(f"Cannot capture the input image: {error}", error=True)
-            return
+            return False
 
         # If inverse lensing is selected, do that; otherwise, use single or dual view.
         if self.inverse_checkbox.isChecked():
@@ -900,6 +1025,7 @@ class LensDesktop(QtWidgets.QMainWindow):
                 self.update_dual_view(frame)
             else:
                 self.update_single_view(frame)
+        return True
 
     # Forward Updates
 
@@ -952,31 +1078,12 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         self.show_ps(img_bgr)
 
-        Lx = 2.0 * self.base_w / max(self.base_w, self.base_h)
-        Ly = 2.0 * self.base_h / max(self.base_w, self.base_h)
-
-        # Forward (lensing) remapping.
-        SIE_map_bgr = cv2.remap(
-            img_bgr,
-            self.map_x * 2.0 / Lx,
-            self.map_y * 2.0 / Ly,
-            interpolation=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT,
-        )
-        SIE_map_rgb = cv2.cvtColor(SIE_map_bgr, cv2.COLOR_BGR2RGB)
-
-        if self.lenslight_checkbox.isChecked():
-            SIE_map_rgb = draw_lens_light(
-                self.b_value,
-                self.kappa,
-                SIE_map_rgb,
-                base_w=self.base_w,
-                base_h=self.base_h,
-            )
+        SIE_map_rgb, alpha = self._forward_layer(img_bgr)
 
         # Optionally overlay critical curve.
         if self.critical_checkbox.isChecked():
-            self.get_critical(SIE_map_rgb)
+            self.get_critical(SIE_map_rgb, alpha)
+        SIE_map_rgb = self._compose_layer(SIE_map_rgb, alpha)
 
         result_image = QtGui.QImage(
             SIE_map_rgb.data,
@@ -999,31 +1106,14 @@ class LensDesktop(QtWidgets.QMainWindow):
 
             img_unlensed = cv2.resize(img_unlensed, (self.base_w, self.base_h))
 
-        Lx = 2 * self.base_w / max(self.base_w, self.base_h)
-        Ly = 2 * self.base_h / max(self.base_w, self.base_h)
-
-        SIE_map_bgr = cv2.remap(
-            img_bgr,
-            self.map_x * 2 / Lx,
-            self.map_y * 2 / Ly,
-            interpolation=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_CONSTANT,
-        )
-        SIE_map_rgb = cv2.cvtColor(SIE_map_bgr, cv2.COLOR_BGR2RGB)
-
-        if self.lenslight_checkbox.isChecked():
-            SIE_map_rgb = draw_lens_light(
-                self.b_value,
-                self.kappa,
-                SIE_map_rgb,
-                base_w=self.base_w,
-                base_h=self.base_h,
-            )
+        SIE_map_rgb, alpha = self._forward_layer(img_bgr)
 
         if self.critical_checkbox.isChecked():
-            contours = self.get_critical(SIE_map_rgb)
+            contours = self.get_critical(SIE_map_rgb, alpha)
             self.get_caustics(img_unlensed, contours)
 
+        img_unlensed = self._compose_layer(img_unlensed, np.ones((self.base_h, self.base_w), np.float32))
+        SIE_map_rgb = self._compose_layer(SIE_map_rgb, alpha)
         # Combine views.
         combined = np.hstack((img_unlensed, SIE_map_rgb))
         result_image = QtGui.QImage(
@@ -1115,11 +1205,12 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.inverse_ps_show(img_bgr)
 
         # Now, perform the inverse remapping to (attempt to) recover the original.
-        inv_img = self.inv_map(img_bgr)
+        inv_img, alpha = self._inverse_layer(img_bgr)
 
         if self.critical_checkbox.isChecked():
             contours = self.get_critical(img_bgr)
-            self.get_caustics(inv_img, contours)
+            self.get_caustics(inv_img, contours, alpha)
+        inv_img = self._compose_layer(inv_img, alpha)
 
         result_image = QtGui.QImage(
             inv_img.data,
@@ -1150,12 +1241,14 @@ class LensDesktop(QtWidgets.QMainWindow):
         img_bgr[r2 == False] = img_bgr.mean()
 
         # Now, perform the inverse remapping to (attempt to) recover the original.
-        inv_img = self.inv_map(img_bgr)
+        inv_img, alpha = self._inverse_layer(img_bgr)
 
         if self.critical_checkbox.isChecked():
             contours = self.get_critical(img_bgr)
-            self.get_caustics(inv_img, contours)
+            self.get_caustics(inv_img, contours, alpha)
 
+        img_bgr = self._compose_layer(img_bgr, np.ones((self.base_h, self.base_w), np.float32))
+        inv_img = self._compose_layer(inv_img, alpha)
         # Combine views.
         combined = np.hstack((img_bgr, inv_img))
         result_image = QtGui.QImage(
@@ -1185,6 +1278,17 @@ class LensDesktop(QtWidgets.QMainWindow):
             else:
 
                 ex, ey = event.x(), event.y()
+                right_panel = self.dual_checkbox.isChecked() and ex >= self.base_w
+                scale, offset_x, offset_y = self._source_placement()
+                point = unplace_point(
+                    ex - (self.base_w if right_panel else 0), ey,
+                    self.base_w, self.base_h, scale, offset_x, offset_y,
+                )
+                if point is None:
+                    return
+                ex, ey = point
+                if right_panel:
+                    ex += self.base_w
 
                 if self.inverse_checkbox.isChecked():
                     if self.dual_checkbox.isChecked():

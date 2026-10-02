@@ -10,7 +10,7 @@ for a printable explanatory A4 page, but defer its content and layout until
 further instructions.
 
 This is an incremental feature plan, not a framework migration or a rewrite.
-Only this document is being added now; the tasks below describe future work.
+This document tracks completed batches and the remaining implementation work.
 The user's request and layering clarification are the requirements for this plan.
 No separate feature spec, constitution, or architecture artifacts were supplied.
 
@@ -25,8 +25,9 @@ Desktop or selected webcam
     -> crop / mirror / input adjustments
     -> greenscreen removal: foreground color + alpha mask
     -> lens foreground color AND alpha
+    -> optional lens light and source-associated explanatory overlays
+    -> size / move the rendered source (AFTER lensing)
     -> composite over unchanged sky
-    -> optional lens light and explanatory overlays
     -> display / image export
 
 Custom sky image -> resize for display -> composition only
@@ -36,6 +37,8 @@ Changing lens parameters must not distort or move the sky. Resizing the canvas
 may change its displayed crop, but not its lensing. The illustrative lens mass
 remains represented by the existing SIE model and optional lens-light overlay;
 loading a sky photograph does not derive a mass distribution from that image.
+The user confirmed that size and position controls should manipulate the
+already-lensed result, not move the input subject relative to the lens.
 
 ## Baseline and constraints
 
@@ -86,11 +89,12 @@ later implementation requirement demonstrates a need.
 | REQ-005 | Lens the transparent foreground and composite it over the static sky consistently across supported views and image exports. |
 | REQ-006 | Prepare a reusable scene snapshot for a later explanatory A4 export; defer the actual page implementation until instructions arrive. |
 | REQ-007 | Preserve existing desktop functionality and document the new Windows workflow and feature behavior. |
+| REQ-008 | Resize and move the rendered source after lensing over an unchanged sky; load the user-supplied Euclid image from `data` by default. |
 
 ## Proposed file boundaries
 
 Keep the current entry point and extract only functionality needed by these
-features. These are proposed future files, not existing modules:
+features. Implemented modules and explicitly marked future modules are:
 
 ```text
 LensDesktop/
@@ -100,13 +104,19 @@ LensDesktop/
     controls.py    Layout-managed settings panel and control signals
     qt_compat.py   Shared binding loader so application and panel use the same Qt
     sources.py     Desktop/webcam normalization, selection, worker and cleanup
-    processing.py  Planned: input normalization, framing, keying and composition
+    processing.py  Sky loading/cache, fitting, placement and composition; keying planned
     scene.py       Planned: scene result and detached export snapshot
 tests/
     test_ui.py          Panel, canvas, controls and image-export checks
     test_entrypoint.py  Package and script launcher checks
     test_sources.py     Frame normalization and threaded camera lifecycle checks
     test_camera_ui.py   Source controls, camera rendering and error integration
+    test_processing.py Sky, fitting, alpha and placement math
+    test_background_ui.py Default sky, all modes, markers and composed exports
+    test_resources.py Bundled image/attribution paths and relocated resource layout
+data/
+    euclid_patch_example.jpg  User-supplied default sky
+    README.md                Image origin, credits and license
 README.md          Setup, controls, layering and troubleshooting documentation
 LensDesktop.spec   Root-level packaging specification
 ```
@@ -223,23 +233,56 @@ justify a different backend. No new dependencies were added.
 
 Depends on Phases 1 and 2.
 
-**Plan 3.1 / REQ-003:** Add Load sky, Clear sky, and aspect-preserving fit/fill
+**Plan 3.1 / REQ-003, REQ-008:** Add Load sky, Clear sky, and aspect-preserving fit/fill
 controls. Initially support local PNG/JPEG files, including Windows paths with
 non-ASCII characters. Decode once, keep the original, and cache the fitted
 background until the canvas size or fitting settings change. Failed loading
 keeps the last valid image and produces a visible error. Cancel is a no-op.
 
-Do not bundle or download a Euclid image automatically. Let the user provide an
-image they may use; retain optional attribution text for a future printed page.
-Scientific FITS images are outside the initial scope.
+The user has now supplied `data/euclid_patch_example.jpg` and requested it as the
+default. Bundle that file and its existing `data/README.md` attribution/license;
+do not download other imagery. Resource paths must be independent of the current
+working directory and work with the existing PyInstaller layout. Scientific FITS
+images are outside the initial scope.
 
-- [ ] T008 [Plan:3.1] Implement image loading, normalized color data, and aspect-preserving background fitting/cache in `LensDesktop/processing.py`.
-- [ ] T009 [Plan:3.1] Add sky-image controls in `LensDesktop/controls.py` and integrate the selected background state and error messages in `LensDesktop/app.py`.
+**Plan 3.2 / REQ-008, REQ-005:** Add post-lens source size and horizontal/vertical
+offset controls, with reset. Keep lens maps and sky unchanged when placement
+changes. Apply the same placement to both Dual view panels, update marker click
+coordinates using its inverse, and include the composition in screenshots and
+sequences. Use explicit layer alpha/coverage rather than interpreting black
+pixels as transparent. Full chroma-keying and scene snapshots remain later work.
+
+- [x] T008 [Plan:3.1] Implement image loading, normalized color data, and aspect-preserving background fitting/cache in `LensDesktop/processing.py`.
+- [x] T009 [Plan:3.1,3.2] Add sky-image and post-lens placement controls in `LensDesktop/controls.py`; integrate the default image, error handling, all views, marker coordinates, and composed image exports in `LensDesktop/app.py` and resource inclusion in `LensDesktop.spec`.
 
 **Acceptance:** A selected sky loads once, remains unchanged as lens parameters
 vary, and can be replaced or cleared. Transparent input pixels reveal the sky;
 without a sky they reveal a documented neutral backdrop. Opaque input still
-covers it, so Phase 4 is necessary to see it behind a webcam subject.
+covers it where present; reducing source size reveals the surrounding sky.
+Phase 4 is still needed to remove the webcam's own greenscreen background.
+
+**Implementation status (2026-10-02):** T008-T009 are implemented with default
+Euclid loading, PNG/JPEG selection, transactional errors/cancellation, clear/
+default actions, fit/fill cache, and source size (10-200%) and offsets (-100 to
+100% of a panel). Defaults remain full-size, centered source placement.
+The static sky bypasses lensing; placement transforms the rendered layer's
+premultiplied color and alpha together. Forward out-of-bounds pixels and inverse
+unsampled pixels expose sky, while real black pixels stay opaque. Clearing the
+sky preserves the legacy opaque reconstruction behavior. Source-associated
+overlays move with the source, and mouse coordinates are mapped back correctly.
+Screenshots and sequences contain the composed scene. Sequence handling was
+repaired for current inverse-map dimensions, cancelled/failed writes, and radius
+restoration; zero lens mass now yields finite zero deflection instead of a
+central division by zero.
+
+All 63 regression tests pass at 1.5 offscreen scaling. Default-asset loading,
+Unicode filenames, fitting/cache, unchanged background-only pixels across modes,
+placement/mapping, alpha coverage, composed exports, and resource paths are
+covered. Native Windows preview with the actual Euclid sky and a simulated
+camera also passed and was visually checked. PyInstaller includes the image and
+attribution file; a relocated bundle layout is tested, but an executable build
+has not been run. Greenscreen removal and the full Phase 5 scene/snapshot work
+remain open.
 
 ### Phase 4: Greenscreen and input manipulation
 
@@ -385,9 +428,10 @@ Implementation evidence below names expected future outputs, not completed work.
 | REQ-002 | 2.1, 2.2, 7.1 | T004-T007, T020 | `LensDesktop/sources.py`; source controls and capture lifecycle integration |
 | REQ-003 | 3.1, 7.1 | T008-T009, T020 | `LensDesktop/processing.py` image loading/cache; sky controls |
 | REQ-004 | 4.1, 4.2, 7.1 | T010-T012, T020 | `LensDesktop/processing.py` framing/keying; input controls and previews |
-| REQ-005 | 4.2, 5.1, 5.2, 5.3, 7.1 | T010, T012-T017, T020-T021 | Shared transparent scene pipeline; all view and image-export paths |
+| REQ-005 | 3.2, 4.2, 5.1, 5.2, 5.3, 7.1 | T009-T010, T012-T017, T020-T021 | Layer coverage/composition and placement; later chroma key and scene/snapshot pipeline |
 | REQ-006 | 5.3, 6.1, 6.2, 7.1 | T015, T017-T020 | `LensDesktop/scene.py` snapshots; later user-approved A4 export implementation |
 | REQ-007 | 1.1, 1.2, 2.1, 5.1, 5.2, 7.1, 7.2 | T001-T004, T007, T013-T014, T016, T020-T023 | Preserved opaque desktop behavior; `README.md`; verified packaging |
+| REQ-008 | 3.1, 3.2 | T008-T009 | Post-lens placement helpers and controls; default `data` asset; all view/export integrations |
 
 ## Suggested delivery order
 

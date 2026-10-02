@@ -53,6 +53,47 @@ class SettingsPanel(QtWidgets.QScrollArea):
         source_layout.addWidget(self.source_status)
         layout.addWidget(source_group)
 
+        background_group = QtWidgets.QGroupBox("Sky background")
+        background_layout = QtWidgets.QVBoxLayout(background_group)
+        background_buttons = QtWidgets.QHBoxLayout()
+        self.load_background = QtWidgets.QPushButton("Load...")
+        self.clear_background = QtWidgets.QPushButton("Clear")
+        self.default_background = QtWidgets.QPushButton("Default")
+        for button in (self.load_background, self.clear_background, self.default_background):
+            background_buttons.addWidget(button)
+        background_layout.addLayout(background_buttons)
+        self.background_mode = QtWidgets.QComboBox()
+        self.background_mode.addItem("Fill (center crop)", "fill")
+        self.background_mode.addItem("Fit (black margins)", "fit")
+        self.background_mode.setAccessibleName("Sky image fitting")
+        background_layout.addWidget(self.background_mode)
+        self.background_status = QtWidgets.QLabel()
+        self.background_status.setWordWrap(True)
+        self.background_status.setTextFormat(QtCore.Qt.PlainText)
+        self.background_status.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred
+        )
+        background_layout.addWidget(self.background_status)
+        placement = QtWidgets.QFormLayout()
+        for name, title, minimum, maximum, value in (
+            ("source_scale", "Source size", 10, 200, 100),
+            ("source_offset_x", "Horizontal offset", -100, 100, 0),
+            ("source_offset_y", "Vertical offset", -100, 100, 0),
+        ):
+            control = QtWidgets.QSpinBox()
+            control.setRange(minimum, maximum)
+            control.setValue(value)
+            control.setSingleStep(5)
+            control.setSuffix(" %")
+            control.setAccessibleName(title)
+            control.setToolTip("Applied after lensing, relative to each image panel.")
+            setattr(self, name, control)
+            placement.addRow(title, control)
+        background_layout.addLayout(placement)
+        self.reset_placement = QtWidgets.QPushButton("Reset source placement")
+        background_layout.addWidget(self.reset_placement)
+        layout.addWidget(background_group)
+
         view_group = QtWidgets.QGroupBox("View")
         view_layout = QtWidgets.QVBoxLayout(view_group)
         view_layout.setSpacing(8)

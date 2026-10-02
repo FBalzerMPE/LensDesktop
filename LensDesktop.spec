@@ -2,7 +2,10 @@
 import os, sys
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_all
 
-datas = []
+datas = [
+    (os.path.join(SPECPATH, 'data', 'euclid_patch_example.jpg'), 'data'),
+    (os.path.join(SPECPATH, 'data', 'README.md'), 'data'),
+]
 binaries = []
 hiddenimports = []
 

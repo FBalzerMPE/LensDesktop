@@ -91,8 +91,39 @@ marker. Clicking the settings panel does not place markers.
 
 Ctrl+V hides or restores the panel and toggles the window frame for presentation.
 Settings are retained. Screenshots export the image, not the settings panel.
-Sky backgrounds, greenscreen processing, and A4 export are future phases
+Greenscreen processing and A4 export are future phases
 described in [PLAN.md](PLAN.md).
+
+### Sky background and source placement
+
+The bundled [Euclid example](data/euclid_patch_example.jpg) loads by default.
+Its source, credits, and license are in [data/README.md](data/README.md); retain
+the required attribution/license when sharing images that use it.
+
+In **Sky background**:
+
+- **Load...** selects a local PNG/JPEG, including non-ASCII Windows filenames.
+  A failed load leaves the last valid sky in place; cancelling does nothing.
+- **Clear** removes the sky and uses a black backdrop. **Default** restores the
+  bundled Euclid image.
+- **Fill** preserves aspect ratio and crops the center to fill the canvas.
+  **Fit** preserves the whole sky image and adds black margins.
+- **Source size** scales the rendered source from 10% to 200% of a panel.
+  **Horizontal offset** and **Vertical offset** shift it by a percentage of the
+  panel width/height (positive values move right/down).
+- **Reset source placement** restores size 100% and zero offsets.
+
+Placement is applied **after lensing**, including the source's curves/markers
+and optional lens-light overlay. It does not move the lens relative to the input,
+recompute the lens maps, or lens the sky. In Dual view, the same placement and
+unchanged sky are used in both panels. Screenshots and sequences export the
+composed scene, without controls.
+
+The sky is decoded once and its fitted version is cached. At the default 100%
+source size, an opaque webcam/desktop image may cover most of it; try 50-60% to
+see the sky around the source. The webcam's own background is still opaque:
+greenscreen removal is a separate upcoming feature. Black subject pixels are
+not treated as transparency.
 
 ### Selecting a webcam
 
