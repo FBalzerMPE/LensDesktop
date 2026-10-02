@@ -56,6 +56,54 @@ pyinstaller --noconfirm LensDesktop.spec
 
 The first start after creating the app usually takes a bit longer.
 
+## Running on Windows for development
+
+Use Python 3.12 and a dedicated environment containing PyQt5. From PowerShell
+in the repository folder:
+
+```powershell
+& "C:\Python312\python.exe" -m venv .venv-qt5
+.\.venv-qt5\Scripts\python.exe -m pip install numpy scipy opencv-python PyQt5 mss
+.\.venv-qt5\Scripts\python.exe .\LensDesktop.py
+```
+
+Replace the first executable path with your installed Python 3.12 path if
+different. Using that path directly avoids Conda environments shadowing the
+Windows `py` launcher. Do not install another Qt binding in this environment:
+the application's loader prefers PySide6, but the current application uses
+Qt5-specific APIs.
+
+## Controls
+
+View toggles and lens sliders are grouped in a settings panel beside the image.
+The panel uses native Qt controls and scrolls when the window is short.
+Mask Radius is shown only in De-lensing mode.
+
+The image remains square (two squares in Dual view) and fits in the available
+canvas area. Extra space is left around it instead of stretching the image.
+Drag the image to move the window; right-click the image to add or remove a
+marker. Clicking the settings panel does not place markers.
+
+Ctrl+V hides or restores the panel and toggles the window frame for presentation.
+Settings are retained. Screenshots export the image, not the settings panel.
+Camera selection, sky backgrounds, greenscreen processing, and A4 export are
+future phases described in [PLAN.md](PLAN.md); this UI update does not add them.
+
+### UI regression checks
+
+The focused checks use the existing environment and Python's standard-library
+test runner; no additional test dependency is needed:
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+.\.venv-qt5\Scripts\python.exe -m unittest discover -s tests -p test_ui.py -v
+Remove-Item Env:QT_QPA_PLATFORM
+```
+
+These checks use synthetic desktop frames. Actual desktop capture, native
+keyboard focus appearance, and display scaling should also be checked on the
+target laptop.
+
 # Lens Desktop
 
 This Python Tool is a Desktop Lens. When executed it will record the screen below it 

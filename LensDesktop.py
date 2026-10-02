@@ -44,6 +44,8 @@ import mss
 from functools import partial
 from scipy.interpolate import RegularGridInterpolator as interp
 from scipy.ndimage import zoom
+from qt_compat import QT_PKG, QtWidgets, QtCore, QtGui
+from controls import SettingsPanel
 
 # Set window extent
 # base_w = 600
@@ -51,28 +53,6 @@ from scipy.ndimage import zoom
 ps = 20
 
 import time
-
-CANDIDATES = ("PySide6", "PyQt6", "PyQt5", "PySide2")
-
-
-def _load_qt():
-    for name in CANDIDATES:
-        try:
-            if name == "PySide6":
-                from PySide6 import QtWidgets, QtCore, QtGui
-            elif name == "PyQt6":
-                from PyQt6 import QtWidgets, QtCore, QtGui
-            elif name == "PyQt5":
-                from PyQt5 import QtWidgets, QtCore, QtGui
-            else:  # PySide2
-                from PySide2 import QtWidgets, QtCore, QtGui
-            return name, QtWidgets, QtCore, QtGui  # success → bail out
-        except ModuleNotFoundError:
-            continue
-    raise ImportError("No Qt binding found. Install PyQt5/PyQt6/PySide6/PySide2.")
-
-
-QT_PKG, QtWidgets, QtCore, QtGui = _load_qt()
 
 QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
 QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
@@ -334,9 +314,11 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         self.setWindowTitle("Lens Desktop")
 
+        self._ready = False
         self.gui_hidden = False
         self.heart = False
         self.frame = True
+        self.old_pos = None
 
         # capture setup
         self.sct = mss.MSS()
@@ -350,123 +332,61 @@ class LensDesktop(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Error", f"Invalid monitor index 0")
             sys.exit(1)
 
-        self.fontsize = self.base_h // 42
-
         self.cam = False
         self.vidcap = None
 
-        self.win_width = self.base_w
-        self.base_h = self.base_h
-
         self.setWindowFlags(QtCore.Qt.Window)
-
-        # self.setFixedSize(self.win_width, self.base_h)
-        self.resize(self.base_w, self.base_h)
-        self.label = QtWidgets.QLabel(self)
+        central = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.canvas = QtWidgets.QWidget()
+        self.canvas.setMinimumSize(120, 120)
+        self.canvas.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+        )
+        self.canvas.setAutoFillBackground(True)
+        self.canvas.setBackgroundRole(QtGui.QPalette.Dark)
+        self.canvas.installEventFilter(self)
+        self.label = QtWidgets.QLabel(self.canvas)
         self.label.setGeometry(0, 0, self.base_w, self.base_h)
+        self.label.installEventFilter(self)
+        self.label.setToolTip("Drag to move the window. Right-click to toggle a marker.")
+        self.settings_panel = SettingsPanel()
+        layout.addWidget(self.canvas, 1)
+        layout.addWidget(self.settings_panel)
+        self.setCentralWidget(central)
 
-        # Checkboxes.
-        # Checkbox to toggle critical curves.
-        self.critical_checkbox = QtWidgets.QCheckBox("Critical Curve", self)
-        self.critical_checkbox.setGeometry(10, 10, 150, 20)
-        self.critical_checkbox.setStyleSheet(
-            f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;"
-        )
+        for name in (
+            "critical_checkbox", "dual_checkbox", "inverse_checkbox",
+            "lenslight_checkbox", "sliderb", "labelb", "sliderq", "labelq",
+            "sliders", "labels", "slidert", "labelt", "slider_mask", "label_mask",
+        ):
+            setattr(self, name, getattr(self.settings_panel, name))
 
-        # Checkbox to toggle dual view.
-        self.dual_checkbox = QtWidgets.QCheckBox("Dual view", self)
-        self.dual_checkbox.setGeometry(10, 40, 150, 20)
         self.dual_checkbox.stateChanged.connect(self.dual_view_toggled)
-        self.dual_checkbox.setStyleSheet(
-            f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;"
-        )
-
-        # New checkbox to toggle inverse lensing.
-        self.inverse_checkbox = QtWidgets.QCheckBox("De-lensing", self)
-        self.inverse_checkbox.setGeometry(10, 70, 150, 20)
         self.inverse_checkbox.stateChanged.connect(self.update_view)
-        self.inverse_checkbox.setStyleSheet(
-            f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;"
-        )
-
-        # New checkbox to toggle inverse lensing.
-        self.lenslight_checkbox = QtWidgets.QCheckBox("Lens Light", self)
-        self.lenslight_checkbox.setGeometry(10, 100, 150, 20)
         self.lenslight_checkbox.stateChanged.connect(self.update_view)
-        self.lenslight_checkbox.setStyleSheet(
-            f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;"
-        )
+        self.critical_checkbox.stateChanged.connect(self.update_view)
 
         # Timer for view updates.
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update_view)
         refresh_rate_hz = 30  # e.g., 30 frames per second
         interval_ms = int(1000 / refresh_rate_hz)
-        self.timer.start(interval_ms)
-        self.old_pos = None
 
-        # Sliders for parameters.
-        # Slider for the Einstein radius
-        self.sliderb = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
-
-        self.sliderb.setRange(40, 99)
-        self.sliderb.setValue(65)
         self.sliderb.valueChanged.connect(self.update_b_value)
         self.b_value = (65 - 40) / (99 - 40)
-        self.labelb = QtWidgets.QLabel("Einstein Radius", self)
-        self.labelb.setStyleSheet(
-            f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;"
-        )
-
-        # Slider for the position angle of the lens mass distribution
-        self.sliderq = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
-        self.sliderq.setRange(40, 99)
-        self.sliderq.setValue(65)
         self.sliderq.valueChanged.connect(self.update_q_value)
         self.q_value = 0.65
-        self.labelq = QtWidgets.QLabel("Axis Ratio", self)
-        self.labelq.setStyleSheet(
-            f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;"
-        )
-
-        # Slider for the softening scale / core radius of the lens mass distribution
-        self.sliders = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
-        self.sliders.setRange(40, 99)
-        self.sliders.setValue(41)
         self.sliders.valueChanged.connect(self.update_s_value)
         self.s_value = (41 - 40) / (99 - 40.0)
-        self.labels = QtWidgets.QLabel("Core Radius", self)
-        self.labels.setStyleSheet(
-            f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;"
-        )
-
-        # Slider for the position angle of the lens mass distribution
-        self.slidert = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
-        self.slidert.setRange(40, 99)
-        self.slidert.setValue(95)
         self.slidert.valueChanged.connect(self.update_t_value)
         self.t_value = (95 - 40) / (99 - 40) * np.pi
-        self.labelt = QtWidgets.QLabel("Position Angle", self)
-        self.labelt.setStyleSheet(
-            f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;"
-        )
-
-        # Slider for the Radius of the source mask (only applies for inverse mapping)
-        self.slider_mask = QtWidgets.QSlider(QtCore.Qt.Horizontal, self)
-        self.slider_mask.setRange(40, 99)
-        self.slider_mask.setValue(40)
         self.slider_mask.valueChanged.connect(self.update_mask)
         self.mask_radius = (
             (40 - 40) / (99 - 40) * np.sqrt(self.base_h**2 + self.base_w**2) / 2
         )
-        self.label_mask = QtWidgets.QLabel("Mask Radius", self)
-        self.label_mask.setStyleSheet(
-            f"font-size: {self.fontsize }pt; font-weight: bold; background-color: lightgray;"
-        )
-        self.slider_mask.setVisible(False)
-        self.label_mask.setVisible(False)
-
-        self.set_Geometry_sliders_and_labels()
 
         # Shortcuts for several features.
 
@@ -506,10 +426,17 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         # try OS-level exclusion
         self.excluded = exclude_from_capture(self)
+        self._ready = True
+        available = self.screen().availableGeometry()
+        self.resize(
+            min(self.base_w + self.settings_panel.width(), available.width()),
+            min(max(self.base_h, 360), available.height()),
+        )
+        self.timer.start(interval_ms)
 
     def _content_capture_rect_px(self):
 
-        tl = self.mapToGlobal(QtCore.QPoint(0, 0))
+        tl = self.label.mapToGlobal(QtCore.QPoint(0, 0))
         region = {
             "left": int(round(tl.x())),
             "top": int(round(tl.y())),
@@ -531,27 +458,10 @@ class LensDesktop(QtWidgets.QMainWindow):
     def HideGUI(self):
 
         self.gui_hidden = not self.gui_hidden
-
-        if self.inverse_checkbox.isChecked():
-            self.slider_mask.setVisible(not self.slider_mask.isVisible())
-            self.label_mask.setVisible(not self.label_mask.isVisible())
-
-        self.slidert.setVisible(not self.slidert.isVisible())
-        self.labelt.setVisible(not self.labelt.isVisible())
-
-        self.sliderb.setVisible(not self.sliderb.isVisible())
-        self.labelb.setVisible(not self.labelb.isVisible())
-
-        self.sliders.setVisible(not self.sliders.isVisible())
-        self.labels.setVisible(not self.labels.isVisible())
-
-        self.sliderq.setVisible(not self.sliderq.isVisible())
-        self.labelq.setVisible(not self.labelq.isVisible())
-
-        self.lenslight_checkbox.setVisible(not self.lenslight_checkbox.isVisible())
-        self.inverse_checkbox.setVisible(not self.inverse_checkbox.isVisible())
-        self.dual_checkbox.setVisible(not self.dual_checkbox.isVisible())
-        self.critical_checkbox.setVisible(not self.critical_checkbox.isVisible())
+        self.settings_panel.setVisible(not self.gui_hidden)
+        if not self.isMaximized():
+            delta = -self.settings_panel.width() if self.gui_hidden else self.settings_panel.width()
+            self.resize(self.width() + delta, self.height())
 
         flags = self.windowFlags()
 
@@ -564,19 +474,49 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         self.setWindowFlags(flags)
         self.show()
+        self.excluded = exclude_from_capture(self)
+        self.centralWidget().layout().activate()
+        self._update_canvas_geometry()
 
     def set_Geometry_sliders_and_labels(self):
+        self.settings_panel.set_inverse_mode(self.inverse_checkbox.isChecked())
 
-        self.sliderb.setGeometry(130, self.base_h - 40, self.base_w * 4 // 6, 20)
-        self.labelb.setGeometry(10, self.base_h - 40, 110, 15)
-        self.sliderq.setGeometry(130, self.base_h - 60, self.base_w * 4 // 6, 20)
-        self.labelq.setGeometry(10, self.base_h - 60, 110, 15)
-        self.sliders.setGeometry(130, self.base_h - 80, self.base_w * 4 // 6, 20)
-        self.labels.setGeometry(10, self.base_h - 80, 110, 15)
-        self.slidert.setGeometry(130, self.base_h - 100, self.base_w * 4 // 6, 20)
-        self.labelt.setGeometry(10, self.base_h - 100, 110, 15)
-        self.slider_mask.setGeometry(130, self.base_h - 120, self.base_w * 4 // 6, 20)
-        self.label_mask.setGeometry(10, self.base_h - 120, 110, 15)
+    def _update_canvas_geometry(self):
+        panels = 2 if self.dual_checkbox.isChecked() else 1
+        side = max(2, min(self.canvas.width() // panels, self.canvas.height()))
+        self.label.setGeometry(
+            (self.canvas.width() - panels * side) // 2,
+            (self.canvas.height() - side) // 2,
+            panels * side,
+            side,
+        )
+        if (side, side) != (self.base_w, self.base_h):
+            scale = side / self.base_w
+            self.ellipses_image_plane = [
+                (x * scale, y * scale) for x, y in self.ellipses_image_plane
+            ]
+            self.ellipses_source_plane = [
+                (x * scale, y * scale) for x, y in self.ellipses_source_plane
+            ]
+            self.base_w = self.base_h = side
+            self.update_mask(self.slider_mask.value())
+        self.update_view()
+
+    def eventFilter(self, watched, event):
+        if self._ready:
+            if watched is self.canvas and event.type() == QtCore.QEvent.Resize:
+                self._update_canvas_geometry()
+            elif watched is self.label:
+                if event.type() == QtCore.QEvent.MouseButtonPress:
+                    self._canvas_mouse_press(event)
+                    return True
+                if event.type() == QtCore.QEvent.MouseMove:
+                    self._canvas_mouse_move(event)
+                    return True
+                if event.type() == QtCore.QEvent.MouseButtonRelease:
+                    self.old_pos = None
+                    return True
+        return super().eventFilter(watched, event)
 
     def camera_recording(self):
         self.cam = not self.cam
@@ -660,7 +600,12 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.caustic_curves = caustic_contours
 
     def dual_view_toggled(self):
-        self.update_view()
+        if not self.isMaximized():
+            panels = 2 if self.dual_checkbox.isChecked() else 1
+            width = self.width() + panels * self.base_w - self.canvas.width()
+            self.resize(min(width, self.screen().availableGeometry().width()), self.height())
+        self.centralWidget().layout().activate()
+        self._update_canvas_geometry()
 
     # Functions that are called when the sliders are updated
     def update_mask(self, valuem):
@@ -805,20 +750,18 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def update_view(self):
 
+        if not self._ready:
+            return
         gc.collect()
+        self.set_Geometry_sliders_and_labels()
 
         # If inverse lensing is selected, do that; otherwise, use single or dual view.
         if self.inverse_checkbox.isChecked():
-            if self.gui_hidden is False:
-                self.slider_mask.setVisible(True)
-                self.label_mask.setVisible(True)
             if self.dual_checkbox.isChecked():
                 self.update_inverse_dual_view()
             else:
                 self.update_inverse_single_view()
         else:
-            self.slider_mask.setVisible(False)
-            self.label_mask.setVisible(False)
             if self.dual_checkbox.isChecked():
                 self.update_dual_view()
             else:
@@ -873,9 +816,6 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def update_single_view(self):
 
-        self.resize(self.base_w, self.base_h)
-        self.label.setGeometry(0, 0, self.base_w, self.base_h)
-
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
@@ -923,9 +863,6 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.label.setPixmap(result_pixmap)
 
     def update_dual_view(self):
-
-        self.resize(2 * self.base_w, self.base_h)
-        self.label.setGeometry(0, 0, 2 * self.base_w, self.base_h)
 
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
@@ -1051,9 +988,6 @@ class LensDesktop(QtWidgets.QMainWindow):
         and then use our inverse_remap_image() routine to “undo” the lensing.
         """
 
-        self.resize(self.base_w, self.base_h)
-        self.label.setGeometry(0, 0, self.base_w, self.base_h)
-
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
         else:
@@ -1087,9 +1021,6 @@ class LensDesktop(QtWidgets.QMainWindow):
         When inverse lensing is enabled, we capture the image, perform the forward mapping as before,
         and then use our inverse_remap_image() routine to “undo” the lensing.
         """
-
-        self.resize(2 * self.base_w, self.base_h)
-        self.label.setGeometry(0, 0, 2 * self.base_w, self.base_h)
 
         if self.cam:
             arr = capture_cam_rect(self.vidcap, self.base_w, self.base_h)
@@ -1127,7 +1058,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         result_pixmap = QtGui.QPixmap.fromImage(result_image)
         self.label.setPixmap(result_pixmap)
 
-    def mousePressEvent(self, event):
+    def _canvas_mouse_press(self, event):
         if event.button() == QtCore.Qt.LeftButton:
             self.old_pos = event.globalPos()
 
@@ -1148,7 +1079,7 @@ class LensDesktop(QtWidgets.QMainWindow):
                 if self.inverse_checkbox.isChecked():
                     if self.dual_checkbox.isChecked():
                         # check for left and right side add accordingly
-                        if ex > self.base_w:
+                        if ex >= self.base_w:
                             self.ellipses_source_plane += [
                                 (
                                     (ex - self.base_w),
@@ -1172,7 +1103,7 @@ class LensDesktop(QtWidgets.QMainWindow):
 
                 else:
                     if self.dual_checkbox.isChecked():
-                        if ex > self.base_w:
+                        if ex >= self.base_w:
                             self.ellipses_image_plane += [
                                 (
                                     (ex - self.base_w),
@@ -1196,37 +1127,12 @@ class LensDesktop(QtWidgets.QMainWindow):
 
                 self.update_lensed_map()
 
-    def resizeEvent(self, event):
-        # This is called whenever the window is resized
-        if self.dual_checkbox.isChecked():
-            self.base_w = self.width() // 2
-            self.base_h = self.base_w  # self.height()
-        else:
-            self.base_w = self.width()
-            self.base_h = self.base_w  # self.height()
-
-        self.update_lensed_map()
-        self.inv_map = partial(
-            inverse_remap_image,
-            x_idx=self.x_idx,
-            y_idx=self.y_idx,
-            mask_radius=self.mask_radius,
-            base_w=self.base_w,
-            base_h=self.base_h,
-        )
-        self.set_Geometry_sliders_and_labels()
-        # Always call the parent implementation
-        super().resizeEvent(event)
-
-    def mouseMoveEvent(self, event):
+    def _canvas_mouse_move(self, event):
 
         if self.old_pos is not None:
             delta = event.globalPos() - self.old_pos
             self.move(self.x() + delta.x(), self.y() + delta.y())
             self.old_pos = event.globalPos()
-
-    def mouseReleaseEvent(self, event):
-        self.old_pos = None
 
     def closeEvent(self, event):
         event.accept()
