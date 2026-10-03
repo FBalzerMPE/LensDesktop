@@ -148,7 +148,11 @@ class RenderedScene:
 
 
 def render_snapshot(
-    snapshot: SceneSnapshot, *, side: int = 734, montage_size: tuple[int, int] = (2197, 733),
+    snapshot: SceneSnapshot,
+    *,
+    side: int = 734,
+    montage_size: tuple[int, int] = (2197, 733),
+    include_montage_critical_curve: bool = True,
 ) -> RenderedScene:
     if not isinstance(side, int) or not 32 <= side <= 2048 or side % 2:
         raise ImageError("Print field resolution must be even and between 32 and 2048 pixels.")
@@ -209,7 +213,7 @@ def render_snapshot(
     color, coverage = lensed.rgb.copy(), lensed.alpha.copy()
     if not display.lens_light:
         color, coverage = apply_lens_light(lens.radius, kappa, color, coverage)
-    if display.curves:
+    if display.curves and include_montage_critical_curve:
         cv2.drawContours(color, critical, -1, (255, 255, 255), 5)
         cv2.drawContours(color, critical, -1, (0, 0, 0), 2)
         cv2.drawContours(coverage, critical, -1, 1.0, 5)

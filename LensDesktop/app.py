@@ -36,29 +36,52 @@ Copyright (c) 2025, Wolfgang Enzi
 
 __author__ = "WolfgangEnzi"
 
+import gc
+
 # Import packages
 import sys
-import gc
-import numpy as np
-import cv2
-import mss
-from mss.exception import ScreenShotError
 from functools import partial
 from pathlib import Path
+
+import cv2
+import mss
+import numpy as np
+from mss.exception import ScreenShotError
 from scipy.interpolate import RegularGridInterpolator as interp
 from scipy.ndimage import zoom
-from .qt_compat import QT_PKG, QtWidgets, QtCore, QtGui, QtPrintSupport
+
+from . import lensing
+from .a4_export import print_a4_snapshot, write_a4_pdf
 from .controls import SettingsPanel
 from .defaults import DefaultsError, load_gui_defaults
-from . import lensing
-from .scene import SceneSnapshot, LensSettings, InputSettings, DisplaySettings, sky_attribution
-from .a4_export import print_a4_snapshot, write_a4_pdf
-from .sources import CameraWorker, SourceError, StaticSource, normalize_bgr, frame_for_canvas
 from .processing import (
-    ImageError, SkyBackground, default_background_path, example_source_path,
-    place_layer, unplace_point, write_image_bgr,
-    ChromaKeySettings, chroma_key, fit_layer,
-    place_source, prepare_input,
+    ChromaKeySettings,
+    ImageError,
+    SkyBackground,
+    chroma_key,
+    default_background_path,
+    example_source_path,
+    fit_layer,
+    place_layer,
+    place_source,
+    prepare_input,
+    unplace_point,
+    write_image_bgr,
+)
+from .qt_compat import QT_PKG, QtCore, QtGui, QtPrintSupport, QtWidgets
+from .scene import (
+    DisplaySettings,
+    InputSettings,
+    LensSettings,
+    SceneSnapshot,
+    sky_attribution,
+)
+from .sources import (
+    CameraWorker,
+    SourceError,
+    StaticSource,
+    frame_for_canvas,
+    normalize_bgr,
 )
 
 # Set window extent
@@ -143,8 +166,15 @@ def create_SIE_map(width, height, b=0.75, q=0.79, s=0.0001, t=0.0, heart=False):
 
 
 def inverse_remap_image(
-    lensed_img, x_idx, y_idx, mask_radius, base_w, base_h,
-    *, return_alpha=False, input_alpha=None,
+    lensed_img,
+    x_idx,
+    y_idx,
+    mask_radius,
+    base_w,
+    base_h,
+    *,
+    return_alpha=False,
+    input_alpha=None,
 ):
     """
     Optimized inverse remapping using flat indexing and manual filling of the 2D histogram
@@ -231,6 +261,7 @@ def exclude_from_capture(widget) -> bool:
     if plat == "darwin":
         try:
             from ctypes import c_void_p
+
             import objc
             from Cocoa import NSWindowSharingNone
 
@@ -296,6 +327,7 @@ class LensDesktop(QtWidgets.QMainWindow):
 
         self.cam = False
         self.selected_camera_index = None
+        self._frozen_camera_index = None
         self.camera_token = None
         self._pending_camera = None
         self._discovery_token = None
@@ -323,16 +355,29 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.label = QtWidgets.QLabel(self.canvas)
         self.label.setGeometry(0, 0, self.base_w, self.base_h)
         self.label.installEventFilter(self)
-        self.label.setToolTip("Drag to move the window. Right-click to toggle a marker.")
+        self.label.setToolTip(
+            "Drag to move the window. Right-click to toggle a marker."
+        )
         self.settings_panel = SettingsPanel(self.gui_defaults)
         layout.addWidget(self.canvas, 1)
         layout.addWidget(self.settings_panel)
         self.setCentralWidget(central)
 
         for name in (
-            "critical_checkbox", "dual_checkbox", "inverse_checkbox",
-            "lenslight_checkbox", "sliderb", "labelb", "sliderq", "labelq",
-            "sliders", "labels", "slidert", "labelt", "slider_mask", "label_mask",
+            "critical_checkbox",
+            "dual_checkbox",
+            "inverse_checkbox",
+            "lenslight_checkbox",
+            "sliderb",
+            "labelb",
+            "sliderq",
+            "labelq",
+            "sliders",
+            "labels",
+            "slidert",
+            "labelt",
+            "slider_mask",
+            "label_mask",
         ):
             setattr(self, name, getattr(self.settings_panel, name))
 
@@ -347,18 +392,24 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.camera_worker.disconnected.connect(self._camera_disconnected)
         self.camera_worker.discovered.connect(self._cameras_discovered)
         self.camera_worker.finished.connect(self._camera_worker_finished)
-        self.settings_panel.source_selector.currentIndexChanged.connect(self._source_changed)
+        self.settings_panel.source_selector.currentIndexChanged.connect(
+            self._source_changed
+        )
         self.settings_panel.source_selector.activated.connect(self._source_activated)
-        self.settings_panel.camera_selector.currentIndexChanged.connect(self._camera_selected)
+        self.settings_panel.camera_selector.currentIndexChanged.connect(
+            self._camera_selected
+        )
         self.settings_panel.refresh_cameras.clicked.connect(self._refresh_cameras)
-        self.settings_panel.cancel_refresh.clicked.connect(self.camera_worker.cancel_discovery)
+        self.settings_panel.cancel_refresh.clicked.connect(
+            self.camera_worker.cancel_discovery
+        )
         self.settings_panel.open_camera.clicked.connect(self._open_camera_index)
         self.settings_panel.load_input_image.clicked.connect(self._choose_input_image)
         self.settings_panel.load_input_example.clicked.connect(self._load_input_example)
         self.settings_panel.freeze_input.clicked.connect(self._freeze_input)
         self.settings_panel.save_input.clicked.connect(self.save_input_image)
         self.settings_panel.export_a4.clicked.connect(self.export_a4_pdf)
-        self.settings_panel.print_a4.clicked.connect(self.print_a4)
+        # self.settings_panel.print_a4.clicked.connect(self.print_a4)
         self.settings_panel.input_fitting.currentIndexChanged.connect(self.update_view)
         self._keyed_input_cache = None
         self._configuration_geometry_cache = None
@@ -367,8 +418,12 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.configuration_enabled.toggled.connect(self.update_view)
         self.settings_panel.configuration_size.valueChanged.connect(self.update_view)
         for button in self.settings_panel.configuration_buttons.values():
-            button.toggled.connect(lambda checked: self.update_view() if checked else None)
-        self.settings_panel.reset_configuration.clicked.connect(self._reset_configuration)
+            button.toggled.connect(
+                lambda checked: self.update_view() if checked else None
+            )
+        self.settings_panel.reset_configuration.clicked.connect(
+            self._reset_configuration
+        )
         self.settings_panel.source_section.reset_button.clicked.connect(
             self._reset_source_settings
         )
@@ -385,12 +440,15 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.key_enabled.toggled.connect(self.update_view)
         self.settings_panel.input_zoom.valueChanged.connect(self.update_view)
         for control in (
-            self.settings_panel.key_tolerance, self.settings_panel.key_softness,
-            self.settings_panel.key_saturation, self.settings_panel.key_spill,
+            self.settings_panel.key_tolerance,
+            self.settings_panel.key_softness,
+            self.settings_panel.key_saturation,
+            self.settings_panel.key_spill,
         ):
             control.valueChanged.connect(self.update_view)
         for control in (
-            self.settings_panel.input_frame_mode, self.settings_panel.input_mirror,
+            self.settings_panel.input_frame_mode,
+            self.settings_panel.input_mirror,
             self.settings_panel.input_preview,
         ):
             control.currentIndexChanged.connect(self.update_view)
@@ -398,14 +456,18 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.load_background.clicked.connect(self._choose_background)
         self.settings_panel.clear_background.clicked.connect(self._clear_background)
         self.settings_panel.default_background.clicked.connect(self._default_background)
-        self.settings_panel.background_mode.currentIndexChanged.connect(self.update_view)
+        self.settings_panel.background_mode.currentIndexChanged.connect(
+            self.update_view
+        )
         for control in (
             self.settings_panel.source_scale,
             self.settings_panel.source_offset_x,
             self.settings_panel.source_offset_y,
         ):
             control.valueChanged.connect(self.update_view)
-        self.settings_panel.reset_placement.clicked.connect(self._reset_source_placement)
+        self.settings_panel.reset_placement.clicked.connect(
+            self._reset_source_placement
+        )
         self._sync_source_selector()
 
         # Timer for view updates.
@@ -425,8 +487,10 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.t_value = (lens_defaults.position_angle - 40) / (99 - 40) * np.pi
         self.slider_mask.valueChanged.connect(self.update_mask)
         self.mask_radius = (
-            (lens_defaults.mask_radius - 40) / (99 - 40)
-            * np.sqrt(self.base_h**2 + self.base_w**2) / 2
+            (lens_defaults.mask_radius - 40)
+            / (99 - 40)
+            * np.sqrt(self.base_h**2 + self.base_w**2)
+            / 2
         )
 
         # Shortcuts for several features.
@@ -479,6 +543,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         )
         if self.dual_checkbox.isChecked():
             self.dual_view_toggled()
+        self._use_default_source()
         self.timer.start(interval_ms)
 
     def _content_capture_rect_px(self):
@@ -502,7 +567,11 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.gui_hidden = not self.gui_hidden
         self.settings_panel.setVisible(not self.gui_hidden)
         if not self.isMaximized():
-            delta = -self.settings_panel.width() if self.gui_hidden else self.settings_panel.width()
+            delta = (
+                -self.settings_panel.width()
+                if self.gui_hidden
+                else self.settings_panel.width()
+            )
             self.resize(self.width() + delta, self.height())
 
         flags = self.windowFlags()
@@ -577,7 +646,9 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.camera_section.set_expanded(True)
         self.settings_panel.ensureWidgetVisible(self.settings_panel.camera_selector)
         self.settings_panel.camera_selector.setFocus()
-        self._source_status("Select a camera after Refresh, or use a manual camera index.")
+        self._source_status(
+            "Select a camera after Refresh, or use a manual camera index."
+        )
 
     def _source_status(self, message, *, error=False):
         self.settings_panel.source_status.setText(message)
@@ -593,99 +664,157 @@ class LensDesktop(QtWidgets.QMainWindow):
             selector.setCurrentIndex(selector.findData(source))
         self.settings_panel.input_fitting.setEnabled(self.static_active)
         self.settings_panel.input_fitting.setVisible(self.static_active)
-        self.settings_panel.freeze_input.setEnabled(not self.static_active and not self._camera_fault)
+        self._sync_freeze_button()
         self.settings_panel.save_input.setEnabled(not self._camera_fault)
         self._sync_export_controls()
 
+    def _sync_freeze_button(self):
+        button = self.settings_panel.freeze_input
+        frozen_webcam = self.static_active and self._frozen_camera_index is not None
+        connecting = self._pending_camera is not None
+        available = self.cam or frozen_webcam
+        if connecting:
+            label = "Connecting to webcam..."
+        elif self._camera_fault or not available:
+            label = "Webcam unavailable"
+        elif frozen_webcam:
+            label = "Resume webcam"
+        else:
+            label = "Freeze webcam"
+        with QtCore.QSignalBlocker(button):
+            button.setChecked(frozen_webcam)
+            button.setText(label)
+            button.setAccessibleName(label)
+            button.setEnabled(
+                available and not connecting and not self._camera_fault and not self._closing
+            )
+
     def _sync_export_controls(self):
         ready = (
-            self.static_active and not self.inverse_checkbox.isChecked()
-            and not self._camera_fault and not self._closing and not self._exporting_a4
+            self.static_active
+            and not self.inverse_checkbox.isChecked()
+            and not self._camera_fault
+            and not self._closing
+            and not self._exporting_a4
         )
         self.settings_panel.export_a4.setEnabled(ready)
-        self.settings_panel.print_a4.setEnabled(ready)
+        # self.settings_panel.print_a4.setEnabled(ready)
 
-    def print_a4(self):
-        try:
-            snapshot = self.capture_print_snapshot()
-        except (ImageError, SourceError) as error:
-            self._a4_status(str(error), error=True)
-            return False
-        printer_mode = getattr(QtPrintSupport.QPrinter, "HighResolution", None)
-        if printer_mode is None:
-            printer_mode = QtPrintSupport.QPrinter.PrinterMode.HighResolution
-        printer = QtPrintSupport.QPrinter(printer_mode)
-        printer.setDocName("Der Gravitationslinseneffekt")
-        layout = QtGui.QPageLayout(
-            QtGui.QPageSize(QtGui.QPageSize.A4),
-            QtGui.QPageLayout.Portrait,
-            QtCore.QMarginsF(0, 0, 0, 0),
-        )
-        # A printer may not be selected until the print dialog opens.
-        printer.setPageLayout(layout)
-        dialog = QtPrintSupport.QPrintDialog(printer, self)
-        execute = getattr(dialog, "exec", None)
-        if execute is None:
-            execute = dialog.exec_
-        accepted = getattr(QtWidgets.QDialog, "Accepted", None)
-        if accepted is None:
-            accepted = QtWidgets.QDialog.DialogCode.Accepted
-        if execute() != accepted:
-            return False
-        if not printer.setPageLayout(layout):
-            self._a4_status("Cannot configure the selected printer for portrait A4.", error=True)
-            return False
+    # def print_a4(self):
+    #     try:
+    #         snapshot = self.capture_print_snapshot()
+    #     except (ImageError, SourceError) as error:
+    #         self._a4_status(str(error), error=True)
+    #         return False
+    #     printer_mode = getattr(QtPrintSupport.QPrinter, "HighResolution", None)
+    #     if printer_mode is None:
+    #         printer_mode = QtPrintSupport.QPrinter.PrinterMode.HighResolution
+    #     printer = QtPrintSupport.QPrinter(printer_mode)
+    #     printer.setDocName("Der Gravitationslinseneffekt")
+    #     layout = QtGui.QPageLayout(
+    #         QtGui.QPageSize(QtGui.QPageSize.A4),
+    #         QtGui.QPageLayout.Portrait,
+    #         QtCore.QMarginsF(0, 0, 0, 0),
+    #     )
+    #     # A printer may not be selected until the print dialog opens.
+    #     printer.setPageLayout(layout)
+    #     dialog = QtPrintSupport.QPrintDialog(printer, self)
+    #     execute = getattr(dialog, "exec", None)
+    #     if execute is None:
+    #         execute = dialog.exec_
+    #     accepted = getattr(QtWidgets.QDialog, "Accepted", None)
+    #     if accepted is None:
+    #         accepted = QtWidgets.QDialog.DialogCode.Accepted
+    #     if execute() != accepted:
+    #         return False
+    #     if not printer.setPageLayout(layout):
+    #         self._a4_status(
+    #             "Cannot configure the selected printer for portrait A4.", error=True
+    #         )
+    #         return False
 
-        self._exporting_a4 = True
-        timer_active = self.timer.isActive()
-        controls_enabled = self.settings_panel.isEnabled()
-        self.timer.stop()
-        self.settings_panel.setEnabled(False)
-        QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.WaitCursor))
-        self._a4_status("Rendering and printing the A4 page...")
-        self.settings_panel.export_status.repaint()
-        try:
-            scene = print_a4_snapshot(snapshot, printer)
-            notice = " Source-size warnings are included on the page." if scene.warnings else ""
-            self._a4_status(f"A4 page sent to the printer.{notice}")
-            return True
-        except (ImageError, cv2.error) as error:
-            self._a4_status(f"Cannot print A4 page: {error}", error=True)
-            return False
-        finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
-            self._exporting_a4 = False
-            self.settings_panel.setEnabled(controls_enabled)
-            self._sync_export_controls()
-            if timer_active and not self._closing:
-                self.timer.start()
+    #     self._exporting_a4 = True
+    #     timer_active = self.timer.isActive()
+    #     controls_enabled = self.settings_panel.isEnabled()
+    #     self.timer.stop()
+    #     self.settings_panel.setEnabled(False)
+    #     QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(QtCore.Qt.WaitCursor))
+    #     self._a4_status("Rendering and printing the A4 page...")
+    #     self.settings_panel.export_status.repaint()
+    #     try:
+    #         scene = print_a4_snapshot(snapshot, printer)
+    #         notice = (
+    #             " Source-size warnings are included on the page."
+    #             if scene.warnings
+    #             else ""
+    #         )
+    #         self._a4_status(f"A4 page sent to the printer.{notice}")
+    #         return True
+    #     except (ImageError, cv2.error) as error:
+    #         self._a4_status(f"Cannot print A4 page: {error}", error=True)
+    #         return False
+    #     finally:
+    #         QtWidgets.QApplication.restoreOverrideCursor()
+    #         self._exporting_a4 = False
+    #         self.settings_panel.setEnabled(controls_enabled)
+    #         self._sync_export_controls()
+    #         if timer_active and not self._closing:
+    #             self.timer.start()
 
     def capture_print_snapshot(self):
         if not self.static_active:
             raise ImageError("Freeze input or load a static image before exporting A4.")
         if self.inverse_checkbox.isChecked():
-            raise ImageError("A4 export requires forward lensing. Turn off De-lensing first.")
+            raise ImageError(
+                "A4 export requires forward lensing. Turn off De-lensing first."
+            )
         if self._camera_fault or self._closing or self._exporting_a4:
-            raise ImageError("The source is unavailable or an A4 export is already running.")
+            raise ImageError(
+                "The source is unavailable or an A4 export is already running."
+            )
         panel = self.settings_panel
         mode, mirror = self._input_framing()
         scale, x, y = self._source_placement()
         return SceneSnapshot(
-            self.static_source.snapshot(), self.background.image,
-            LensSettings(self.b_value, self.q_value, self.s_value, self.t_value, self.heart),
+            self.static_source.snapshot(),
+            self.background.image,
+            LensSettings(
+                self.b_value, self.q_value, self.s_value, self.t_value, self.heart
+            ),
             InputSettings(
-                panel.chroma_settings(), mode, mirror, panel.input_zoom.value(),
-                panel.selected_configuration() if panel.configuration_enabled.isChecked() else None,
+                panel.chroma_settings(),
+                mode,
+                mirror,
+                panel.input_zoom.value(),
+                (
+                    panel.selected_configuration()
+                    if panel.configuration_enabled.isChecked()
+                    else None
+                ),
                 panel.configuration_size.value(),
             ),
             DisplaySettings(
-                scale, x, y, panel.background_mode.currentData(),
-                self.lenslight_checkbox.isChecked(), self.critical_checkbox.isChecked(),
-                tuple((x / self.base_w, y / self.base_h) for x, y in self.ellipses_image_plane),
-                tuple((x / self.base_w, y / self.base_h) for x, y in self.ellipses_source_plane),
+                scale,
+                x,
+                y,
+                panel.background_mode.currentData(),
+                self.lenslight_checkbox.isChecked(),
+                self.critical_checkbox.isChecked(),
+                tuple(
+                    (x / self.base_w, y / self.base_h)
+                    for x, y in self.ellipses_image_plane
+                ),
+                tuple(
+                    (x / self.base_w, y / self.base_h)
+                    for x, y in self.ellipses_source_plane
+                ),
                 ps / self.base_w,
             ),
-            self.static_source.path.name if self.static_source.path else "Eingefrorene Aufnahme",
+            (
+                self.static_source.path.name
+                if self.static_source.path
+                else "Eingefrorene Aufnahme"
+            ),
             sky_attribution(self.background.path),
         )
 
@@ -700,17 +829,27 @@ class LensDesktop(QtWidgets.QMainWindow):
             self._a4_status(str(error), error=True)
             return False
         filename, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export A4 PDF", "lensing_demo.pdf", "PDF Files (*.pdf)",
+            self,
+            "Export A4 PDF",
+            "lensing_demo.pdf",
+            "PDF Files (*.pdf)",
         )
         if not filename:
             return False
         path = Path(filename)
         if not path.suffix:
             path = path.with_suffix(".pdf")
-            if path.exists() and QtWidgets.QMessageBox.question(
-                self, "Replace PDF?", f"{path.name} already exists. Replace it?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.No,
-            ) != QtWidgets.QMessageBox.Yes:
+            if (
+                path.exists()
+                and QtWidgets.QMessageBox.question(
+                    self,
+                    "Replace PDF?",
+                    f"{path.name} already exists. Replace it?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No,
+                )
+                != QtWidgets.QMessageBox.Yes
+            ):
                 return False
         elif path.suffix.lower() != ".pdf":
             self._a4_status("Choose a filename ending in .pdf.", error=True)
@@ -725,7 +864,11 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.settings_panel.export_status.repaint()
         try:
             scene = write_a4_pdf(snapshot, path)
-            notice = " Source-size warnings are included on the page." if scene.warnings else ""
+            notice = (
+                " Source-size warnings are included on the page."
+                if scene.warnings
+                else ""
+            )
             self._a4_status(f"A4 PDF saved to {path}.{notice}")
             return True
         except (ImageError, cv2.error) as error:
@@ -756,7 +899,10 @@ class LensDesktop(QtWidgets.QMainWindow):
             self._show_camera_selector()
 
     def _source_activated(self, index):
-        if index == 0 and self._pending_camera is not None:
+        if (
+            self.settings_panel.source_selector.itemData(index) == "desktop"
+            and self._pending_camera is not None
+        ):
             self._use_desktop()
 
     def _camera_selected(self):
@@ -773,13 +919,16 @@ class LensDesktop(QtWidgets.QMainWindow):
     def _request_camera(self, index):
         self._pending_camera = self.camera_worker.select(index)
         self._sync_source_selector()
-        self._source_status(f"Opening camera {index}... Previous source remains active.")
+        self._source_status(
+            f"Opening camera {index}... Previous source remains active."
+        )
 
     def _use_desktop(self):
         self.camera_worker.use_desktop()
         self._pending_camera = None
         self.cam = False
         self.static_active = False
+        self._frozen_camera_index = None
         self.camera_token = None
         self._camera_fault = False
         self._sync_source_selector()
@@ -793,6 +942,7 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.camera_token = token
         self.cam = True
         self.static_active = False
+        self._frozen_camera_index = None
         self._camera_fault = False
         self.selected_camera_index = index
         self.settings_panel.camera_index.setValue(index)
@@ -812,7 +962,10 @@ class LensDesktop(QtWidgets.QMainWindow):
             return
         self._pending_camera = None
         self._sync_source_selector()
-        self._source_status(f"{message} Previous source kept. Use index / retry to try again.", error=True)
+        self._source_status(
+            f"{message} Previous source kept. Use index / retry to try again.",
+            error=True,
+        )
 
     def _camera_disconnected(self, token, message):
         if self._closing or token != self.camera_token:
@@ -828,7 +981,9 @@ class LensDesktop(QtWidgets.QMainWindow):
         self._discovery_token = self.camera_worker.discover()
         self.settings_panel.refresh_cameras.setEnabled(False)
         self.settings_panel.cancel_refresh.setEnabled(True)
-        self._source_status("Scanning camera indices 0-4... A camera driver may take time to respond.")
+        self._source_status(
+            "Scanning camera indices 0-4... A camera driver may take time to respond."
+        )
 
     def _cameras_discovered(self, token, indices, cancelled, errors):
         if self._closing or token != self._discovery_token:
@@ -840,12 +995,25 @@ class LensDesktop(QtWidgets.QMainWindow):
             selector = self.settings_panel.camera_selector
             selector.clear()
             selector.addItem("Select a camera...", None)
-            for index in sorted(set(indices + (
-                [self.selected_camera_index] if self.selected_camera_index is not None else []
-            ))):
-                label = f"Camera {index}" if index in indices else f"Camera {index} (manual / previous)"
+            for index in sorted(
+                set(
+                    indices
+                    + (
+                        [self.selected_camera_index]
+                        if self.selected_camera_index is not None
+                        else []
+                    )
+                )
+            ):
+                label = (
+                    f"Camera {index}"
+                    if index in indices
+                    else f"Camera {index} (manual / previous)"
+                )
                 selector.addItem(label, index)
-            selector.setCurrentIndex(max(0, selector.findData(self.selected_camera_index)))
+            selector.setCurrentIndex(
+                max(0, selector.findData(self.selected_camera_index))
+            )
         if self._pending_camera is not None or self._camera_fault or self.static_active:
             return
         if cancelled:
@@ -856,7 +1024,9 @@ class LensDesktop(QtWidgets.QMainWindow):
             message = "No accessible cameras at indices 0-4. Check permissions or try a manual index."
         if errors:
             message += f"\n{errors}"
-        self._source_status(message, error=bool(errors) or (not cancelled and not indices))
+        self._source_status(
+            message, error=bool(errors) or (not cancelled and not indices)
+        )
 
     def _acquire_source_frame(self):
         if self.static_active:
@@ -867,18 +1037,25 @@ class LensDesktop(QtWidgets.QMainWindow):
             return self.camera_worker.snapshot(self.camera_token)
         return normalize_bgr(self.capture_screen_rect())
 
-    def _activate_static_source(self):
+    def _activate_static_source(self, *, frozen_camera_index=None):
         self.camera_worker.use_desktop()
         self._pending_camera = None
         self.camera_token = None
         self.cam = False
         self.static_active = True
+        self._frozen_camera_index = frozen_camera_index
         self._camera_fault = False
         self._sync_source_selector()
         frame = self.static_source.frame
         assert frame is not None
-        name = self.static_source.path.name if self.static_source.path is not None else "frozen live frame"
-        self._source_status(f"Static input: {name} ({frame.shape[1]} x {frame.shape[0]}).")
+        name = (
+            self.static_source.path.name
+            if self.static_source.path is not None
+            else "frozen live frame"
+        )
+        self._source_status(
+            f"Static input: {name} ({frame.shape[1]} x {frame.shape[0]})."
+        )
         self.update_view()
 
     def _load_input_image(self, path):
@@ -888,17 +1065,25 @@ class LensDesktop(QtWidgets.QMainWindow):
             self._source_status(str(error), error=True)
             self._sync_source_selector()
             return False
+        self._frozen_camera_index = None
         with QtCore.QSignalBlocker(self.settings_panel.input_fitting):
             index = self.settings_panel.input_fitting.findData(
                 self.gui_defaults.input.loaded_image_fitting
             )
             self.settings_panel.input_fitting.setCurrentIndex(index)
         self._activate_static_source()
-        return True
+
+    def _use_default_source(self):
+        if self.gui_defaults.source.default_source == "hand_example":
+            self._load_input_example()
+        else:
+            self._use_desktop()
 
     def _choose_input_image(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Load static input image", str(example_source_path().parent),
+            self,
+            "Load static input image",
+            str(example_source_path().parent),
             "Image Files (*.png *.jpg *.jpeg);;All Files (*)",
         )
         if path:
@@ -913,15 +1098,22 @@ class LensDesktop(QtWidgets.QMainWindow):
         if self._closing:
             return
         if self.static_active:
-            self._source_status("Input is already static; select Desktop or Webcam to resume live input.")
+            if self._frozen_camera_index is None:
+                self._source_status("No frozen webcam is available to resume.")
+                return
+            self._request_camera(self._frozen_camera_index)
             return
         try:
             if self._camera_fault:
-                raise SourceError("Cannot freeze a disconnected camera. Retry or select Desktop.")
+                raise SourceError("Cannot freeze a disconnected webcam. Retry first.")
+            if not self.cam or self.selected_camera_index is None:
+                raise SourceError("Select and connect a webcam before freezing it.")
             frame = self._acquire_source_frame()
             if frame is None:
-                raise SourceError("No live input frame is available yet. Try freezing again.")
-            self.static_source.set_frame(frame, mirror=self.cam)
+                raise SourceError(
+                    "No webcam frame is available yet. Try freezing again."
+                )
+            self.static_source.set_frame(frame, mirror=True)
         except (SourceError, ScreenShotError, cv2.error) as error:
             self._source_status(f"Cannot freeze input: {error}", error=True)
             return
@@ -930,12 +1122,14 @@ class LensDesktop(QtWidgets.QMainWindow):
                 self.gui_defaults.input.frozen_input_fitting
             )
             self.settings_panel.input_fitting.setCurrentIndex(index)
-        self._activate_static_source()
+        self._activate_static_source(frozen_camera_index=self.selected_camera_index)
 
     def save_input_image(self):
         try:
             if self._camera_fault:
-                raise SourceError("Cannot save a disconnected camera's input. Retry or load a static image.")
+                raise SourceError(
+                    "Cannot save a disconnected camera's input. Retry or load a static image."
+                )
             frame = self._acquire_source_frame()
             if frame is None:
                 raise SourceError("No current input frame is available.")
@@ -944,7 +1138,9 @@ class LensDesktop(QtWidgets.QMainWindow):
             self._source_status(f"Cannot save input: {error}", error=True)
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Save native input for calibration", "input.png",
+            self,
+            "Save native input for calibration",
+            "input.png",
             "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg)",
         )
         if not path:
@@ -987,14 +1183,18 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def _choose_background(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Load sky background", "",
+            self,
+            "Load sky background",
+            "",
             "Image Files (*.png *.jpg *.jpeg);;All Files (*)",
         )
         if path:
             self._load_background(path)
 
     def _default_background(self):
-        self._load_background(default_background_path(self.gui_defaults.background.image))
+        self._load_background(
+            default_background_path(self.gui_defaults.background.image)
+        )
 
     def _reset_background_settings(self):
         panel = self.settings_panel
@@ -1022,7 +1222,8 @@ class LensDesktop(QtWidgets.QMainWindow):
         with QtCore.QSignalBlocker(panel.camera_selector):
             panel.camera_selector.setCurrentIndex(panel.camera_selector.findData(None))
         self.selected_camera_index = None
-        self._use_desktop()
+        self._frozen_camera_index = None
+        self._use_default_source()
 
     def _reset_source_placement(self):
         panel = self.settings_panel
@@ -1040,11 +1241,15 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def _choose_key_color(self):
         panel = self.settings_panel
-        color = QtWidgets.QColorDialog.getColor(QtGui.QColor(*panel.key_color_rgb), self, "Key color")
+        color = QtWidgets.QColorDialog.getColor(
+            QtGui.QColor(*panel.key_color_rgb), self, "Key color"
+        )
         if not color.isValid():
             return
         if color.hsvSaturation() < 16:
-            self._source_status("Choose a saturated key color, not black, white, or gray.", error=True)
+            self._source_status(
+                "Choose a saturated key color, not black, white, or gray.", error=True
+            )
             return
         panel.key_color_rgb = (color.red(), color.green(), color.blue())
         panel.update_key_color_label()
@@ -1055,9 +1260,16 @@ class LensDesktop(QtWidgets.QMainWindow):
         defaults = self.gui_defaults.input
         key_defaults = defaults.key
         controls = (
-            panel.key_enabled, panel.key_tolerance, panel.key_softness,
-            panel.key_saturation, panel.key_spill, panel.input_frame_mode,
-            panel.input_mirror, panel.input_preview, panel.input_fitting, panel.input_zoom,
+            panel.key_enabled,
+            panel.key_tolerance,
+            panel.key_softness,
+            panel.key_saturation,
+            panel.key_spill,
+            panel.input_frame_mode,
+            panel.input_mirror,
+            panel.input_preview,
+            panel.input_fitting,
+            panel.input_zoom,
         )
         blockers = [QtCore.QSignalBlocker(control) for control in controls]
         panel.key_enabled.setChecked(key_defaults.enabled)
@@ -1090,7 +1302,8 @@ class LensDesktop(QtWidgets.QMainWindow):
         mode = panel.input_frame_mode.currentData()
         if mode == "default":
             mode = (
-                panel.input_fitting.currentData() if self.static_active
+                panel.input_fitting.currentData()
+                if self.static_active
                 else "fill" if self.cam else "stretch"
             )
         mirror = panel.input_mirror.currentData()
@@ -1101,7 +1314,10 @@ class LensDesktop(QtWidgets.QMainWindow):
         return mode, mirror
 
     def _configuration_active(self):
-        return self.settings_panel.configuration_enabled.isChecked() and not self.inverse_checkbox.isChecked()
+        return (
+            self.settings_panel.configuration_enabled.isChecked()
+            and not self.inverse_checkbox.isChecked()
+        )
 
     def _configuration_status(self, message, *, error=False):
         self.settings_panel.configuration_status.setText(message)
@@ -1113,12 +1329,21 @@ class LensDesktop(QtWidgets.QMainWindow):
         panel = self.settings_panel
         active = self._configuration_active()
         panel.set_configuration_controls_enabled(active)
-        if panel.configuration_enabled.isChecked() and self.inverse_checkbox.isChecked():
-            self._configuration_status("Presets apply only to forward lensing. Turn off De-lensing to use them.")
+        if (
+            panel.configuration_enabled.isChecked()
+            and self.inverse_checkbox.isChecked()
+        ):
+            self._configuration_status(
+                "Presets apply only to forward lensing. Turn off De-lensing to use them."
+            )
         elif not active:
-            self._configuration_status("Off: original input framing. Post-lens source placement is unchanged.")
+            self._configuration_status(
+                "Off: original input framing. Post-lens source placement is unchanged."
+            )
         elif panel.input_preview.currentData() != "scene":
-            self._configuration_status("Calibration previews stay unplaced. Select Composed scene to see the configuration.")
+            self._configuration_status(
+                "Calibration previews stay unplaced. Select Composed scene to see the configuration."
+            )
 
     def _reset_view_settings(self):
         panel = self.settings_panel
@@ -1185,12 +1410,16 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def _configured_source(self, rgb, alpha):
         if self.b_value <= 0:
-            raise ImageError("Cross/Cusp/Fold require positive Einstein radius. Increase lens mass.")
+            raise ImageError(
+                "Cross/Cusp/Fold require positive Einstein radius. Increase lens mass."
+            )
         parameters = (self.q_value, self.s_value, self.heart)
         geometry_cache = self._configuration_geometry_cache
         if geometry_cache is None or geometry_cache[0] != parameters:
             try:
-                geometry = source_configuration_geometry(self.q_value, self.s_value, 0, self.heart)
+                geometry = source_configuration_geometry(
+                    self.q_value, self.s_value, 0, self.heart
+                )
             except ImageError as error:
                 self._configuration_geometry_cache = (parameters, None, str(error))
                 raise
@@ -1203,21 +1432,36 @@ class LensDesktop(QtWidgets.QMainWindow):
         name, size = panel.selected_configuration(), panel.configuration_size.value()
         configuration = (parameters, self.b_value, self.t_value, name, size)
         cached = self._configured_source_cache
-        if self.static_active and cached is not None and cached[0] is rgb and cached[1] is alpha and cached[2] == configuration:
+        if (
+            self.static_active
+            and cached is not None
+            and cached[0] is rgb
+            and cached[1] is alpha
+            and cached[2] == configuration
+        ):
             self._configuration_status(cached[5])
             return cached[3], cached[4]
         rotation = np.array(
-            [[np.cos(self.t_value), np.sin(self.t_value)], [-np.sin(self.t_value), np.cos(self.t_value)]],
+            [
+                [np.cos(self.t_value), np.sin(self.t_value)],
+                [-np.sin(self.t_value), np.cos(self.t_value)],
+            ],
         )
         position = rotation @ geometry.position(name) * self.b_value
         placed, coverage, diameter = place_source(
-            rgb, alpha, self.b_value, size, (float(position[0]), float(position[1])),
+            rgb,
+            alpha,
+            self.b_value,
+            size,
+            (float(position[0]), float(position[1])),
         )
         warning = ""
         if size / 200 >= geometry.clearance(name):
             warning = " Source may cross the caustic and blend images; reduce Input size for a cleaner configuration."
         if diameter < 2:
-            warning += " Source is below two input samples; enlarge the canvas or Input size."
+            warning += (
+                " Source is below two input samples; enlarge the canvas or Input size."
+            )
         if np.any(np.abs(position) + self.b_value * size / 200 > 1):
             warning += " Source may be clipped by the source-plane canvas."
         message = (
@@ -1228,7 +1472,14 @@ class LensDesktop(QtWidgets.QMainWindow):
         if self.static_active:
             placed.setflags(write=False)
             coverage.setflags(write=False)
-            self._configured_source_cache = (rgb, alpha, configuration, placed, coverage, message)
+            self._configured_source_cache = (
+                rgb,
+                alpha,
+                configuration,
+                placed,
+                coverage,
+                message,
+            )
         return placed, coverage
 
     def _keyed_input(self, frame):
@@ -1237,9 +1488,20 @@ class LensDesktop(QtWidgets.QMainWindow):
         zoom = self.settings_panel.input_zoom.value()
         configuration = (settings, mode, mirror, zoom, self.base_w, self.base_h)
         cached = self._keyed_input_cache
-        if not self.static_active or cached is None or cached[0] is not frame or cached[1] != configuration:
+        if (
+            not self.static_active
+            or cached is None
+            or cached[0] is not frame
+            or cached[1] != configuration
+        ):
             rgb, alpha = prepare_input(
-                frame, settings, self.base_w * 2, self.base_h * 2, mode, mirror=mirror, zoom=zoom,
+                frame,
+                settings,
+                self.base_w * 2,
+                self.base_h * 2,
+                mode,
+                mirror=mirror,
+                zoom=zoom,
             )
             if self.static_active:
                 rgb.setflags(write=False)
@@ -1254,7 +1516,9 @@ class LensDesktop(QtWidgets.QMainWindow):
             rgb = np.clip(np.rint(rgb), 0, 255).astype(np.uint8)
         rgb = np.ascontiguousarray(rgb)
         height, width = rgb.shape[:2]
-        image = QtGui.QImage(rgb.data, width, height, width * 3, QtGui.QImage.Format_RGB888)
+        image = QtGui.QImage(
+            rgb.data, width, height, width * 3, QtGui.QImage.Format_RGB888
+        )
         self.label.setPixmap(QtGui.QPixmap.fromImage(image))
 
     def _show_input_preview(self, frame):
@@ -1265,22 +1529,37 @@ class LensDesktop(QtWidgets.QMainWindow):
             rgb, alpha = chroma_key(frame, ChromaKeySettings())
             mode, mirror = self._input_framing()
             image, _ = fit_layer(
-                rgb, alpha, self.base_w * 2, self.base_h * 2, mode, mirror=mirror,
+                rgb,
+                alpha,
+                self.base_w * 2,
+                self.base_h * 2,
+                mode,
+                mirror=mirror,
                 zoom=self.settings_panel.input_zoom.value(),
             )
-        image = cv2.resize(image, (self.base_w, self.base_h), interpolation=cv2.INTER_AREA)
-        self._set_image_rgb(np.hstack((image, image)) if self.dual_checkbox.isChecked() else image)
+        image = cv2.resize(
+            image, (self.base_w, self.base_h), interpolation=cv2.INTER_AREA
+        )
+        self._set_image_rgb(
+            np.hstack((image, image)) if self.dual_checkbox.isChecked() else image
+        )
 
     def _update_keyed_view(self, rgb, alpha):
         if self.inverse_checkbox.isChecked():
-            source, source_alpha = fit_layer(rgb, alpha, self.base_w, self.base_h, "stretch")
+            source, source_alpha = fit_layer(
+                rgb, alpha, self.base_w, self.base_h, "stretch"
+            )
             self.inverse_ps_show(source, source_alpha)
             if self.dual_checkbox.isChecked():
                 yy, xx = np.indices(source_alpha.shape)
-                excluded = (yy - self.base_h // 2) ** 2 + (xx - self.base_w // 2) ** 2 <= self.mask_radius**2
+                excluded = (yy - self.base_h // 2) ** 2 + (
+                    xx - self.base_w // 2
+                ) ** 2 <= self.mask_radius**2
                 source[excluded] = 0
                 source_alpha[excluded] = 0
-            transformed, transformed_alpha = self.inv_map(source, input_alpha=source_alpha)
+            transformed, transformed_alpha = self.inv_map(
+                source, input_alpha=source_alpha
+            )
             if self.critical_checkbox.isChecked():
                 contours = self.get_critical(source, source_alpha)
                 self.get_caustics(transformed, contours, transformed_alpha)
@@ -1290,13 +1569,21 @@ class LensDesktop(QtWidgets.QMainWindow):
                 bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
                 self.show_ps(bgr, alpha)
                 rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            source, source_alpha = fit_layer(rgb, alpha, self.base_w, self.base_h, "stretch")
+            source, source_alpha = fit_layer(
+                rgb, alpha, self.base_w, self.base_h, "stretch"
+            )
             Lx = 2 * self.base_w / max(self.base_w, self.base_h)
             Ly = 2 * self.base_h / max(self.base_w, self.base_h)
             transformed, transformed_alpha = lensing.forward_layer(
-                rgb, alpha, self.map_x * 2 / Lx, self.map_y * 2 / Ly,
-                opaque=False, sky_present=self.background.image is not None,
-                lens_radius=self.b_value, kappa=self.kappa, lens_light=self.lenslight_checkbox.isChecked(),
+                rgb,
+                alpha,
+                self.map_x * 2 / Lx,
+                self.map_y * 2 / Ly,
+                opaque=False,
+                sky_present=self.background.image is not None,
+                lens_radius=self.b_value,
+                kappa=self.kappa,
+                lens_light=self.lenslight_checkbox.isChecked(),
             )
             if self.critical_checkbox.isChecked():
                 contours = self.get_critical(transformed, transformed_alpha)
@@ -1319,9 +1606,15 @@ class LensDesktop(QtWidgets.QMainWindow):
         map_x = self.map_x * 2 / Lx
         map_y = self.map_y * 2 / Ly
         return lensing.forward_layer(
-            cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB), np.ones(img_bgr.shape[:2], np.float32),
-            map_x, map_y, opaque=True, sky_present=self.background.image is not None,
-            lens_radius=self.b_value, kappa=self.kappa, lens_light=self.lenslight_checkbox.isChecked(),
+            cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB),
+            np.ones(img_bgr.shape[:2], np.float32),
+            map_x,
+            map_y,
+            opaque=True,
+            sky_present=self.background.image is not None,
+            lens_radius=self.b_value,
+            kappa=self.kappa,
+            lens_light=self.lenslight_checkbox.isChecked(),
         )
 
     def _inverse_layer(self, rgb):
@@ -1363,14 +1656,19 @@ class LensDesktop(QtWidgets.QMainWindow):
         self.y_idx = np.clip(y_idx, 0, len(y_bins) - 2)
 
         self.contours, self.caustic_curves = lensing.lensing_curves(
-            self.map_x, self.map_y, self.deflxv, self.deflyv,
+            self.map_x,
+            self.map_y,
+            self.deflxv,
+            self.deflyv,
         )
 
     def dual_view_toggled(self):
         if not self.isMaximized():
             panels = 2 if self.dual_checkbox.isChecked() else 1
             width = self.width() + panels * self.base_w - self.canvas.width()
-            self.resize(min(width, self.screen().availableGeometry().width()), self.height())
+            self.resize(
+                min(width, self.screen().availableGeometry().width()), self.height()
+            )
         self.centralWidget().layout().activate()
         self._update_canvas_geometry()
 
@@ -1483,13 +1781,19 @@ class LensDesktop(QtWidgets.QMainWindow):
         )
 
         if file_path and not pixmap.save(file_path):
-            self._background_status(f"Cannot save image to {file_path}. Check permissions and file format.", error=True)
+            self._background_status(
+                f"Cannot save image to {file_path}. Check permissions and file format.",
+                error=True,
+            )
 
         gc.collect()
 
     def recording(self):
 
-        configured = self._configuration_active() and self.settings_panel.input_preview.currentData() == "scene"
+        configured = (
+            self._configuration_active()
+            and self.settings_panel.input_preview.currentData() == "scene"
+        )
         if configured and not self.update_view():
             return
         file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
@@ -1506,18 +1810,25 @@ class LensDesktop(QtWidgets.QMainWindow):
         radii = np.linspace(0, b0, 160)
         if configured:
             radii = radii[radii > 0]
-            self._background_status("Configuration sequence omits zero mass: no Einstein radius is defined.")
+            self._background_status(
+                "Configuration sequence omits zero mass: no Einstein radius is defined."
+            )
         try:
             for i, radius in enumerate(radii):
                 self.b_value = float(radius)
                 self.update_mask(self.slider_mask.value())
                 if not self.update_view():
-                    self._background_status("Sequence export stopped: no current input image available.", error=True)
+                    self._background_status(
+                        "Sequence export stopped: no current input image available.",
+                        error=True,
+                    )
                     break
                 pixmap = self.label.pixmap().copy()
                 output = path.with_name(f"{path.stem}_{i:04d}{path.suffix}")
                 if not pixmap.save(str(output)):
-                    self._background_status(f"Cannot save sequence image to {output}.", error=True)
+                    self._background_status(
+                        f"Cannot save sequence image to {output}.", error=True
+                    )
                     break
         finally:
             self.b_value = b0
@@ -1544,7 +1855,10 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def changeEvent(self, event):
         super().changeEvent(event)
-        if getattr(self, "_ready", False) and event.type() == QtCore.QEvent.WindowStateChange:
+        if (
+            getattr(self, "_ready", False)
+            and event.type() == QtCore.QEvent.WindowStateChange
+        ):
             QtCore.QTimer.singleShot(0, self._update_screen_height_limit)
 
     def _update_screen_height_limit(self, *args):
@@ -1552,7 +1866,8 @@ class LensDesktop(QtWidgets.QMainWindow):
         handle = self.windowHandle()
         margins = handle.frameMargins() if handle is not None else QtCore.QMargins()
         frame_height = max(
-            margins.top() + margins.bottom(), self.frameGeometry().height() - self.height(),
+            margins.top() + margins.bottom(),
+            self.frameGeometry().height() - self.height(),
         )
         self.setMaximumHeight(max(1, available.height() - frame_height))
         if self.isMaximized():
@@ -1581,13 +1896,19 @@ class LensDesktop(QtWidgets.QMainWindow):
             if self.settings_panel.input_preview.currentData() != "scene":
                 self._show_input_preview(frame)
                 return True
-            if self.settings_panel.key_enabled.isChecked() or self._configuration_active():
+            if (
+                self.settings_panel.key_enabled.isChecked()
+                or self._configuration_active()
+            ):
                 rgb, alpha = self._keyed_input(frame)
                 if self._configuration_active():
                     try:
                         rgb, alpha = self._configured_source(rgb, alpha)
                     except ImageError as error:
-                        self._configuration_status(f"{error} Last image kept; snapshot export is unavailable.", error=True)
+                        self._configuration_status(
+                            f"{error} Last image kept; snapshot export is unavailable.",
+                            error=True,
+                        )
                         return False
                 self._update_keyed_view(rgb, alpha)
                 return True
@@ -1599,16 +1920,25 @@ class LensDesktop(QtWidgets.QMainWindow):
                 rgb, alpha = chroma_key(frame, ChromaKeySettings())
                 mode, mirror = self._input_framing()
                 rgb, _ = fit_layer(
-                    rgb, alpha, self.base_w * 2, self.base_h * 2, mode, mirror=mirror,
+                    rgb,
+                    alpha,
+                    self.base_w * 2,
+                    self.base_h * 2,
+                    mode,
+                    mirror=mirror,
                     zoom=self.settings_panel.input_zoom.value(),
                 )
                 frame = cv2.cvtColor(np.rint(rgb).astype(np.uint8), cv2.COLOR_RGB2BGR)
             elif self.static_active:
                 frame = self.static_source.render_frame(
-                    self.base_w, self.base_h, self.settings_panel.input_fitting.currentData()
+                    self.base_w,
+                    self.base_h,
+                    self.settings_panel.input_fitting.currentData(),
                 )
             else:
-                frame = frame_for_canvas(frame, self.base_w, self.base_h, camera=self.cam)
+                frame = frame_for_canvas(
+                    frame, self.base_w, self.base_h, camera=self.cam
+                )
         except (SourceError, ImageError, cv2.error, ScreenShotError) as error:
             self._source_status(f"Cannot capture the input image: {error}", error=True)
             return False
@@ -1630,8 +1960,13 @@ class LensDesktop(QtWidgets.QMainWindow):
 
     def show_ps(self, img_bgr, alpha=None):
         lensing.draw_forward_markers(
-            img_bgr, alpha, self.map_x, self.map_y,
-            self.ellipses_image_plane, self.ellipses_source_plane, ps,
+            img_bgr,
+            alpha,
+            self.map_x,
+            self.map_y,
+            self.ellipses_image_plane,
+            self.ellipses_source_plane,
+            ps,
         )
 
     def update_single_view(self, img_bgr):
@@ -1672,7 +2007,9 @@ class LensDesktop(QtWidgets.QMainWindow):
             contours = self.get_critical(SIE_map_rgb, alpha)
             self.get_caustics(img_unlensed, contours)
 
-        img_unlensed = self._compose_layer(img_unlensed, np.ones((self.base_h, self.base_w), np.float32))
+        img_unlensed = self._compose_layer(
+            img_unlensed, np.ones((self.base_h, self.base_w), np.float32)
+        )
         SIE_map_rgb = self._compose_layer(SIE_map_rgb, alpha)
         # Combine views.
         combined = np.hstack((img_unlensed, SIE_map_rgb))
@@ -1734,7 +2071,14 @@ class LensDesktop(QtWidgets.QMainWindow):
                                 )
                             if alpha is not None:
                                 cv2.ellipse(
-                                    alpha, (int(x0), int(y0)), (ps // 2, ps // 2), 0, 0, 360, 1.0, -1,
+                                    alpha,
+                                    (int(x0), int(y0)),
+                                    (ps // 2, ps // 2),
+                                    0,
+                                    0,
+                                    360,
+                                    1.0,
+                                    -1,
                                 )
 
             if len(self.ellipses_image_plane) > 0:
@@ -1756,7 +2100,16 @@ class LensDesktop(QtWidgets.QMainWindow):
                         -1,  # thickness
                     )
                 if alpha is not None:
-                    cv2.ellipse(alpha, (int(x0), int(y0)), (ps // 2, ps // 2), 0, 0, 360, 1.0, -1)
+                    cv2.ellipse(
+                        alpha,
+                        (int(x0), int(y0)),
+                        (ps // 2, ps // 2),
+                        0,
+                        0,
+                        360,
+                        1.0,
+                        -1,
+                    )
 
     def update_inverse_single_view(self, frame):
         """
@@ -1813,7 +2166,9 @@ class LensDesktop(QtWidgets.QMainWindow):
             contours = self.get_critical(img_bgr)
             self.get_caustics(inv_img, contours, alpha)
 
-        img_bgr = self._compose_layer(img_bgr, np.ones((self.base_h, self.base_w), np.float32))
+        img_bgr = self._compose_layer(
+            img_bgr, np.ones((self.base_h, self.base_w), np.float32)
+        )
         inv_img = self._compose_layer(inv_img, alpha)
         # Combine views.
         combined = np.hstack((img_bgr, inv_img))
@@ -1850,8 +2205,13 @@ class LensDesktop(QtWidgets.QMainWindow):
                 right_panel = self.dual_checkbox.isChecked() and ex >= self.base_w
                 scale, offset_x, offset_y = self._source_placement()
                 point = unplace_point(
-                    ex - (self.base_w if right_panel else 0), ey,
-                    self.base_w, self.base_h, scale, offset_x, offset_y,
+                    ex - (self.base_w if right_panel else 0),
+                    ey,
+                    self.base_w,
+                    self.base_h,
+                    scale,
+                    offset_x,
+                    offset_y,
                 )
                 if point is None:
                     return
@@ -1924,7 +2284,9 @@ class LensDesktop(QtWidgets.QMainWindow):
         if self.camera_worker.isRunning():
             event.ignore()
             self.settings_panel.setEnabled(False)
-            self._source_status("Closing... Waiting for the camera driver to release its devices.")
+            self._source_status(
+                "Closing... Waiting for the camera driver to release its devices."
+            )
             return
         self._ready = False
         self.sct.close()

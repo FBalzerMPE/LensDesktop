@@ -120,7 +120,7 @@ def paint_a4_page(
     text(
         rect(30, 21, 150, 9),
         "Wie sähe dein Licht aus, wenn es auf seinem Weg zu uns durch die Schwerkraft "
-        "einer Galaxie abgelenkt würde?\nEine visuelle Demonstration.",
+        "einer Galaxie abgelenkt würde?",
         9,
         centered=True,
     )
@@ -195,10 +195,7 @@ def paint_a4_page(
             ),
         )
     painter.restore()
-    source_caption = (
-        "Quellenebene: Die Markierung zeigt das Quellenzentrum, die rote Kaustik ist die mathematische Beschreibung der kritischen Kurve. "
-        + " ".join(scene.warnings)
-    )
+    source_caption = "Quellenebene: Die Markierung zeigt das Quellenzentrum, die rote Linie ist die mathematische Beschreibung der kritischen Kurve in der Quellenebene. Je näher die Quelle an dieser Kaustik liegt, desto höher die Magnifikation."
     if not scene.caustic_curves:
         source_caption += " Keine Kaustik im dargestellten Feld."
     text(rect(12, 179, 88, 10), source_caption, 7)
@@ -242,7 +239,12 @@ def paint_a4_page(
 def write_a4_pdf(snapshot: SceneSnapshot, path: str | Path) -> RenderedScene:
     if QtGui.QGuiApplication.instance() is None:
         raise ImageError("A running Qt application is required for A4 PDF export.")
-    scene = render_snapshot(snapshot, side=PRINT_SIDE, montage_size=MONTAGE_SIZE)
+    scene = render_snapshot(
+        snapshot,
+        side=PRINT_SIDE,
+        montage_size=MONTAGE_SIZE,
+        include_montage_critical_curve=False,
+    )
     output = QtCore.QSaveFile(str(path))
     if not output.open(QtCore.QIODevice.WriteOnly):
         raise ImageError(f"Cannot open A4 PDF output: {output.errorString()}")
@@ -286,7 +288,12 @@ def write_a4_pdf(snapshot: SceneSnapshot, path: str | Path) -> RenderedScene:
 def print_a4_snapshot(snapshot: SceneSnapshot, printer) -> RenderedScene:
     if QtGui.QGuiApplication.instance() is None:
         raise ImageError("A running Qt application is required for A4 printing.")
-    scene = render_snapshot(snapshot, side=PRINT_SIDE, montage_size=MONTAGE_SIZE)
+    scene = render_snapshot(
+        snapshot,
+        side=PRINT_SIDE,
+        montage_size=MONTAGE_SIZE,
+        include_montage_critical_curve=False,
+    )
     painter = QtGui.QPainter()
     if not painter.begin(printer):
         raise ImageError("Cannot start the A4 printer painter.")

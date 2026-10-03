@@ -12,6 +12,7 @@ class GuiDefaultsTests(unittest.TestCase):
         config = ConfigParser()
         config.read(defaults_path(), encoding="utf-8")
         self.assertEqual(defaults_path().name, "defaults.ini")
+        self.assertEqual(defaults.source.default_source, "hand_example")
         self.assertEqual(defaults.input.key.color, (0, 255, 128))
         self.assertEqual(defaults.input.zoom, 100)
         self.assertEqual(defaults.configuration.preset, "cross")

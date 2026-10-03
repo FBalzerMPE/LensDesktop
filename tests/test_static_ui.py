@@ -66,6 +66,18 @@ class StaticInputIntegrationTests(unittest.TestCase):
         self.assertFalse(self.window.settings_panel.freeze_input.isEnabled())
         self.assertFalse(self.captures)
 
+    def test_startup_defaults_to_the_hand_example_and_desktop_is_third_source(self):
+        panel = self.window.settings_panel
+        self.assertTrue(self.window.static_active)
+        self.assertEqual(self.window.static_source.path, example_source_path())
+        self.assertEqual(
+            [panel.source_selector.itemData(i) for i in range(panel.source_selector.count())],
+            ["static", "webcam", "desktop"],
+        )
+        self.assertEqual(panel.source_selector.currentData(), "static")
+        self.assertFalse(panel.freeze_input.isEnabled())
+        self.assertIn("unavailable", panel.freeze_input.text().lower())
+
     def test_static_source_is_immutable_across_all_modes_and_settings(self):
         self.window._load_input_example()
         expected = self.window.static_source.snapshot()
@@ -80,18 +92,13 @@ class StaticInputIntegrationTests(unittest.TestCase):
                     self.assertEqual(self.window.label.pixmap().width(), self.window.base_w * (2 if dual else 1))
                     np.testing.assert_array_equal(self.window.static_source.snapshot(), expected)
 
-    def test_desktop_freeze_holds_pixels_and_can_resume(self):
-        expected = self.window._acquire_source_frame().copy()
-        self.window.settings_panel.freeze_input.click()
-        self.assertTrue(self.window.static_active)
-        self.desktop_frame[:] = 0
-        np.testing.assert_array_equal(self.window._acquire_source_frame(), expected)
-        self.window.settings_panel.source_selector.setCurrentIndex(0)
+    def test_desktop_source_does_not_offer_webcam_freeze(self):
+        self.window.settings_panel.source_selector.setCurrentIndex(
+            self.window.settings_panel.source_selector.findData("desktop")
+        )
         self.assertFalse(self.window.static_active)
-        np.testing.assert_array_equal(self.window._acquire_source_frame(), 0)
-        self.window.settings_panel.source_selector.setCurrentIndex(2)
-        self.assertTrue(self.window.static_active)
-        np.testing.assert_array_equal(self.window._acquire_source_frame(), expected)
+        self.assertEqual(self.window.settings_panel.freeze_input.text(), "Webcam unavailable")
+        self.assertFalse(self.window.settings_panel.freeze_input.isEnabled())
 
     def test_camera_freeze_releases_device_and_preserves_native_unmirrored_data(self):
         self.window.settings_panel.open_camera.click()
@@ -104,9 +111,13 @@ class StaticInputIntegrationTests(unittest.TestCase):
         self.assertTrue(self.window.static_source.mirror)
         self.assertEqual(self.window.settings_panel.input_fitting.currentData(), "fill")
         np.testing.assert_array_equal(self.window._acquire_source_frame(), expected)
-        self.window.camera_recording()
+        self.assertTrue(self.window.settings_panel.freeze_input.isChecked())
+        self.assertEqual(self.window.settings_panel.freeze_input.text(), "Resume webcam")
+        self.window.settings_panel.freeze_input.click()
         self.wait_until(lambda: self.window.cam)
         self.assertFalse(self.window.static_active)
+        self.assertFalse(self.window.settings_panel.freeze_input.isChecked())
+        self.assertEqual(self.window.settings_panel.freeze_input.text(), "Freeze webcam")
 
     def test_failed_camera_request_keeps_static_input(self):
         self.window._load_input_example()
@@ -119,10 +130,15 @@ class StaticInputIntegrationTests(unittest.TestCase):
         np.testing.assert_array_equal(self.window._acquire_source_frame(), expected)
 
     def test_cancelled_static_selection_keeps_live_source(self):
+        self.window.static_source.frame = None
+        self.window.static_source.path = None
+        self.window._use_desktop()
         with patch.object(
             desktop.QtWidgets.QFileDialog, "getOpenFileName", return_value=("", "")
         ):
-            self.window.settings_panel.source_selector.setCurrentIndex(2)
+            self.window.settings_panel.source_selector.setCurrentIndex(
+                self.window.settings_panel.source_selector.findData("static")
+            )
         self.assertFalse(self.window.static_active)
         self.assertEqual(self.window.settings_panel.source_selector.currentData(), "desktop")
         self.assertIsNone(self.window.static_source.frame)
@@ -180,7 +196,7 @@ class StaticInputIntegrationTests(unittest.TestCase):
             self.assertNotEqual(saved.shape[1], self.window.label.pixmap().width())
 
     def test_save_snapshots_input_before_file_dialog_and_appends_png(self):
-        self.window._freeze_input()
+        self.window._load_input_example()
         expected = self.window.static_source.snapshot()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "calibration"
@@ -194,7 +210,7 @@ class StaticInputIntegrationTests(unittest.TestCase):
             np.testing.assert_array_equal(read_image_bgr(path.with_suffix(".png")), expected)
 
     def test_cancelled_save_does_not_write_or_change_input(self):
-        self.window._freeze_input()
+        self.window._load_input_example()
         expected = self.window.static_source.snapshot()
         status = self.window.settings_panel.source_status.text()
         with patch.object(

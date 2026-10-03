@@ -6,7 +6,9 @@ from .processing import ChromaKeySettings
 def _set_combo_data(combo, data):
     index = combo.findData(data)
     if index < 0:
-        raise ValueError(f"Unsupported default value for {combo.accessibleName()}: {data}")
+        raise ValueError(
+            f"Unsupported default value for {combo.accessibleName()}: {data}"
+        )
     combo.setCurrentIndex(index)
 
 
@@ -22,7 +24,9 @@ class CollapsibleSection(QtWidgets.QWidget):
         self.header.setAccessibleName(title)
         self.header.setCheckable(True)
         self.header.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
-        self.header.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.header.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
         self.body = QtWidgets.QFrame()
         self.body.setObjectName("sectionBody")
         self.body_layout = QtWidgets.QVBoxLayout(self.body)
@@ -55,7 +59,9 @@ class CollapsibleSection(QtWidgets.QWidget):
     def set_expanded(self, expanded):
         with QtCore.QSignalBlocker(self.header):
             self.header.setChecked(expanded)
-        self.header.setArrowType(QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow)
+        self.header.setArrowType(
+            QtCore.Qt.DownArrow if expanded else QtCore.Qt.RightArrow
+        )
         self.body.setVisible(expanded)
 
 
@@ -78,11 +84,32 @@ class SettingsPanel(QtWidgets.QScrollArea):
         )
         source_layout = self.source_section.body_layout
         self.source_selector = QtWidgets.QComboBox()
-        self.source_selector.addItem("Desktop", "desktop")
-        self.source_selector.addItem("Webcam", "webcam")
         self.source_selector.addItem("Static image", "static")
+        self.source_selector.addItem("Webcam", "webcam")
+        self.source_selector.addItem("Desktop", "desktop")
         self.source_selector.setAccessibleName("Input source")
         source_layout.addWidget(self.source_selector)
+        self.freeze_input = QtWidgets.QPushButton("Webcam unavailable")
+        self.freeze_input.setObjectName("webcamFreezeToggle")
+        self.freeze_input.setAccessibleName("Freeze webcam")
+        self.freeze_input.setCheckable(True)
+        self.freeze_input.setMinimumHeight(36)
+        self.freeze_input.setToolTip(
+            "Freeze the current webcam frame; click again to resume the webcam."
+        )
+        self.freeze_input.setStyleSheet(
+            "QPushButton#webcamFreezeToggle {"
+            " background-color: #187a78; color: white; font-weight: bold; padding: 6px;"
+            " border: 1px solid #126361; border-radius: 5px;"
+            "}"
+            "QPushButton#webcamFreezeToggle:checked {"
+            " background-color: #c17a25; border-color: #995d17;"
+            "}"
+            "QPushButton#webcamFreezeToggle:disabled {"
+            " background-color: #aab5b5; border-color: #aab5b5; color: #eef1f1;"
+            "}"
+        )
+        source_layout.addWidget(self.freeze_input)
         self.camera_selector = QtWidgets.QComboBox()
         self.camera_selector.addItem("Select a camera...", None)
         self.camera_selector.setAccessibleName("Camera")
@@ -115,17 +142,14 @@ class SettingsPanel(QtWidgets.QScrollArea):
         static_buttons = QtWidgets.QHBoxLayout()
         self.load_input_image = QtWidgets.QPushButton("Load image...")
         self.load_input_example = QtWidgets.QPushButton("Hand example")
+        self.save_input = QtWidgets.QPushButton("Save input...")
         static_buttons.addWidget(self.load_input_image)
         static_buttons.addWidget(self.load_input_example)
         source_layout.addLayout(static_buttons)
-        capture_buttons = QtWidgets.QHBoxLayout()
-        self.freeze_input = QtWidgets.QPushButton("Freeze input")
-        self.save_input = QtWidgets.QPushButton("Save input...")
-        self.freeze_input.setToolTip("Freeze the native live frame; rendering settings remain adjustable.")
-        self.save_input.setToolTip("Save native input before crop, mirroring, lensing, sky, or overlays.")
-        capture_buttons.addWidget(self.freeze_input)
-        capture_buttons.addWidget(self.save_input)
-        source_layout.addLayout(capture_buttons)
+        source_layout.addWidget(self.save_input)
+        self.save_input.setToolTip(
+            "Save native input before crop, mirroring, lensing, sky, or overlays."
+        )
         self.input_fitting = QtWidgets.QComboBox()
         self.input_fitting.addItem("Static fit (whole image)", "fit")
         self.input_fitting.addItem("Static fill (center crop)", "fill")
@@ -157,14 +181,38 @@ class SettingsPanel(QtWidgets.QScrollArea):
         input_layout.addWidget(self.key_color)
         key_form = QtWidgets.QFormLayout()
         for name, title, maximum, value, suffix, tooltip in (
-            ("key_tolerance", "Hue tolerance", 180, key_defaults.tolerance, " deg",
-             "Hue distance from the key color that becomes fully transparent."),
-            ("key_softness", "Edge softness", 90, key_defaults.softness, " deg",
-             "Additional hue range blended from transparent to opaque."),
-            ("key_saturation", "Minimum saturation", 100, key_defaults.saturation * 100, " %",
-             "Protect low-saturation skin, gray and black from removal."),
-            ("key_spill", "Spill suppression", 100, key_defaults.spill * 100, " %",
-             "Reduce excess key-color channel near the selected hue."),
+            (
+                "key_tolerance",
+                "Hue tolerance",
+                180,
+                key_defaults.tolerance,
+                " deg",
+                "Hue distance from the key color that becomes fully transparent.",
+            ),
+            (
+                "key_softness",
+                "Edge softness",
+                90,
+                key_defaults.softness,
+                " deg",
+                "Additional hue range blended from transparent to opaque.",
+            ),
+            (
+                "key_saturation",
+                "Minimum saturation",
+                100,
+                key_defaults.saturation * 100,
+                " %",
+                "Protect low-saturation skin, gray and black from removal.",
+            ),
+            (
+                "key_spill",
+                "Spill suppression",
+                100,
+                key_defaults.spill * 100,
+                " %",
+                "Reduce excess key-color channel near the selected hue.",
+            ),
         ):
             control = QtWidgets.QSpinBox()
             control.setRange(0, maximum)
@@ -180,16 +228,28 @@ class SettingsPanel(QtWidgets.QScrollArea):
         framing_form = QtWidgets.QFormLayout()
         self.input_frame_mode = QtWidgets.QComboBox()
         for text, data in (
-            ("Source default", "default"), ("Fit (whole image)", "fit"), ("Fill (center crop)", "fill")
+            ("Source default", "default"),
+            ("Fit (whole image)", "fit"),
+            ("Fill (center crop)", "fill"),
         ):
             self.input_frame_mode.addItem(text, data)
         self.input_mirror = QtWidgets.QComboBox()
-        for text, data in (("Source default", "default"), ("Unmirrored", "off"), ("Mirrored", "on")):
+        for text, data in (
+            ("Source default", "default"),
+            ("Unmirrored", "off"),
+            ("Mirrored", "on"),
+        ):
             self.input_mirror.addItem(text, data)
         self.input_preview = QtWidgets.QComboBox()
-        for text, data in (("Composed scene", "scene"), ("Original source", "source"), ("Alpha mask", "mask")):
+        for text, data in (
+            ("Composed scene", "scene"),
+            ("Original source", "source"),
+            ("Alpha mask", "mask"),
+        ):
             self.input_preview.addItem(text, data)
-        self.input_preview.setToolTip("Mask: white is retained, black is removed. Previews bypass lensing and placement.")
+        self.input_preview.setToolTip(
+            "Mask: white is retained, black is removed. Previews bypass lensing and placement."
+        )
         _set_combo_data(self.input_frame_mode, defaults.input.framing)
         _set_combo_data(self.input_mirror, defaults.input.mirror)
         _set_combo_data(self.input_preview, defaults.input.preview)
@@ -234,13 +294,17 @@ class SettingsPanel(QtWidgets.QScrollArea):
             "Longest visible source extent as a percentage of the Einstein radius. "
             "Transparent margins are trimmed and the subject is centered before placement."
         )
-        size_row, self.configuration_size_value = self._percentage_row(self.configuration_size)
+        size_row, self.configuration_size_value = self._percentage_row(
+            self.configuration_size
+        )
         size_form.addRow("Input size", size_row)
         configuration_layout.addLayout(size_form)
         presets = QtWidgets.QHBoxLayout()
         self.configuration_group = QtWidgets.QButtonGroup(self)
         self.configuration_buttons = {}
-        for index, (name, title) in enumerate((("cross", "Cross"), ("cusp", "Cusp"), ("fold", "Fold"))):
+        for index, (name, title) in enumerate(
+            (("cross", "Cross"), ("cusp", "Cusp"), ("fold", "Fold"))
+        ):
             button = QtWidgets.QRadioButton(title)
             self.configuration_group.addButton(button, index)
             self.configuration_buttons[name] = button
@@ -253,7 +317,8 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.configuration_status.setWordWrap(True)
         self.configuration_status.setTextFormat(QtCore.Qt.PlainText)
         self.configuration_status.setSizePolicy(
-            QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Ignored,
+            QtWidgets.QSizePolicy.Preferred,
         )
         configuration_layout.addWidget(self.configuration_status)
         self.set_configuration_controls_enabled(defaults.configuration.enabled)
@@ -266,7 +331,11 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.load_background = QtWidgets.QPushButton("Load...")
         self.clear_background = QtWidgets.QPushButton("Clear")
         self.default_background = QtWidgets.QPushButton("Default")
-        for button in (self.load_background, self.clear_background, self.default_background):
+        for button in (
+            self.load_background,
+            self.clear_background,
+            self.default_background,
+        ):
             background_buttons.addWidget(button)
         background_layout.addLayout(background_buttons)
         self.background_mode = QtWidgets.QComboBox()
@@ -294,12 +363,26 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.source_scale.setSingleStep(5)
         self.source_scale.setPageStep(25)
         self.source_scale.setAccessibleName("Source size")
-        self.source_scale.setToolTip("Size of the rendered source after lensing, relative to each image panel.")
+        self.source_scale.setToolTip(
+            "Size of the rendered source after lensing, relative to each image panel."
+        )
         scale_row, self.source_scale_value = self._percentage_row(self.source_scale)
         placement.addRow("Source size", scale_row)
         for name, title, minimum, maximum, value in (
-            ("source_offset_x", "Horizontal offset", -100, 100, defaults.placement.offset_x),
-            ("source_offset_y", "Vertical offset", -100, 100, defaults.placement.offset_y),
+            (
+                "source_offset_x",
+                "Horizontal offset",
+                -100,
+                100,
+                defaults.placement.offset_x,
+            ),
+            (
+                "source_offset_y",
+                "Vertical offset",
+                -100,
+                100,
+                defaults.placement.offset_y,
+            ),
         ):
             control = QtWidgets.QSpinBox()
             control.setRange(minimum, maximum)
@@ -327,12 +410,14 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.inverse_checkbox.setChecked(defaults.view.de_lensing)
         self.lenslight_checkbox = QtWidgets.QCheckBox("Lens Light")
         self.lenslight_checkbox.setChecked(defaults.view.lens_light)
-        for index, checkbox in enumerate((
-            self.critical_checkbox,
-            self.dual_checkbox,
-            self.inverse_checkbox,
-            self.lenslight_checkbox,
-        )):
+        for index, checkbox in enumerate(
+            (
+                self.critical_checkbox,
+                self.dual_checkbox,
+                self.inverse_checkbox,
+                self.lenslight_checkbox,
+            )
+        ):
             view_layout.addWidget(checkbox, index // 2, index % 2)
         self.view_section.body_layout.addLayout(view_layout)
 
@@ -374,20 +459,24 @@ class SettingsPanel(QtWidgets.QScrollArea):
         )
         self.export_a4 = QtWidgets.QPushButton("Export A4 PDF...")
         self.export_a4.setEnabled(False)
-        self.export_a4.setToolTip("Freeze input or load a static image. A4 export requires forward lensing.")
-        self.print_a4 = QtWidgets.QPushButton("Print A4...")
-        self.print_a4.setEnabled(False)
-        self.print_a4.setToolTip("Open the printer dialog for a portrait A4 print.")
+        self.export_a4.setToolTip(
+            "Freeze input or load a static image. A4 export requires forward lensing."
+        )
+        # self.print_a4 = QtWidgets.QPushButton("Print A4...")
+        # self.print_a4.setEnabled(False)
+        # self.print_a4.setToolTip("Open the printer dialog for a portrait A4 print.")
         export_buttons = QtWidgets.QHBoxLayout()
         export_buttons.addWidget(self.export_a4)
-        export_buttons.addWidget(self.print_a4)
+        # export_buttons.addWidget(self.print_a4)
         self.export_section.body_layout.addLayout(export_buttons)
         self.export_status = QtWidgets.QLabel(
             "Portrait A4, German text, five panels. Freeze input or load a static image first. Ctrl+P exports the PDF."
         )
         self.export_status.setWordWrap(True)
         self.export_status.setTextFormat(QtCore.Qt.PlainText)
-        self.export_status.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+        self.export_status.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred
+        )
         self.export_section.body_layout.addWidget(self.export_status)
         layout.addWidget(self.export_section)
         self.reset_input = self.input_section.reset_button
@@ -399,16 +488,19 @@ class SettingsPanel(QtWidgets.QScrollArea):
         layout.addWidget(hint)
         layout.addStretch()
         self.sections = (
-            self.source_section, self.input_section, self.background_section,
-            self.placement_section, self.configuration_section, self.lens_section, self.view_section,
+            self.source_section,
+            self.input_section,
+            self.background_section,
+            self.placement_section,
+            self.configuration_section,
+            self.lens_section,
+            self.view_section,
             self.export_section,
         )
         self.setWidget(content)
         self._apply_style()
         self.ensurePolished()
-        scrollbar_width = self.style().pixelMetric(
-            QtWidgets.QStyle.PM_ScrollBarExtent
-        )
+        scrollbar_width = self.style().pixelMetric(QtWidgets.QStyle.PM_ScrollBarExtent)
         body_width = max(section.body.sizeHint().width() for section in self.sections)
         self.setFixedWidth(max(320, body_width + 24 + scrollbar_width))
 
@@ -433,7 +525,11 @@ class SettingsPanel(QtWidgets.QScrollArea):
         self.configuration_size_value.setText(f"{self.configuration_size.value()}%")
 
     def selected_configuration(self):
-        return next(name for name, button in self.configuration_buttons.items() if button.isChecked())
+        return next(
+            name
+            for name, button in self.configuration_buttons.items()
+            if button.isChecked()
+        )
 
     def set_configuration_controls_enabled(self, enabled):
         self.configuration_size.setEnabled(enabled)
@@ -447,7 +543,11 @@ class SettingsPanel(QtWidgets.QScrollArea):
         text = palette.color(QtGui.QPalette.Text).name()
         border = palette.color(QtGui.QPalette.Mid).name()
         disabled = palette.color(QtGui.QPalette.Disabled, QtGui.QPalette.Text).name()
-        accent = "#237679" if palette.color(QtGui.QPalette.Window).lightness() > 128 else "#64c2c4"
+        accent = (
+            "#237679"
+            if palette.color(QtGui.QPalette.Window).lightness() > 128
+            else "#64c2c4"
+        )
         self.setStyleSheet(f"""
             QScrollArea#settingsPanel, QWidget#settingsContent {{ background: {window}; }}
             QFrame#sectionBody {{ background: {base}; border: 1px solid {border}; border-radius: 8px; }}
@@ -487,18 +587,26 @@ class SettingsPanel(QtWidgets.QScrollArea):
 
     def chroma_settings(self):
         return ChromaKeySettings(
-            enabled=self.key_enabled.isChecked(), color=self.key_color_rgb,
-            tolerance=self.key_tolerance.value(), softness=self.key_softness.value(),
-            saturation=self.key_saturation.value() / 100, spill=self.key_spill.value() / 100,
+            enabled=self.key_enabled.isChecked(),
+            color=self.key_color_rgb,
+            tolerance=self.key_tolerance.value(),
+            softness=self.key_softness.value(),
+            saturation=self.key_saturation.value() / 100,
+            spill=self.key_spill.value() / 100,
         )
 
     def update_key_color_label(self):
-        self.key_color.setText("Key color: #{:02x}{:02x}{:02x}...".format(*self.key_color_rgb))
+        self.key_color.setText(
+            "Key color: #{:02x}{:02x}{:02x}...".format(*self.key_color_rgb)
+        )
 
     def set_key_controls_enabled(self, enabled):
         for control in (
-            self.key_color, self.key_tolerance, self.key_softness,
-            self.key_saturation, self.key_spill,
+            self.key_color,
+            self.key_tolerance,
+            self.key_softness,
+            self.key_saturation,
+            self.key_spill,
         ):
             control.setEnabled(enabled)
 

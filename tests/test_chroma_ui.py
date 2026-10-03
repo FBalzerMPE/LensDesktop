@@ -55,6 +55,7 @@ class ChromaIntegrationTests(unittest.TestCase):
         self.window.show()
         self.application.processEvents()
         self.panel = self.window.settings_panel
+        self.panel.key_enabled.setChecked(False)
         self.panel.configuration_enabled.setChecked(False)
         self.window.dual_checkbox.setChecked(False)
         self.window.critical_checkbox.setChecked(False)
@@ -136,7 +137,7 @@ class ChromaIntegrationTests(unittest.TestCase):
         self.wait_until(lambda: captures[0].released)
         np.testing.assert_array_equal(self.displayed_rgb(), live)
         np.testing.assert_array_equal(self.window.static_source.snapshot(), native)
-        self.window.camera_recording()
+        self.panel.freeze_input.click()
         self.wait_until(lambda: self.window.cam)
         np.testing.assert_array_equal(self.displayed_rgb(), live)
         self.window._use_desktop()
@@ -232,11 +233,17 @@ class ChromaIntegrationTests(unittest.TestCase):
         self.panel.input_mirror.setCurrentIndex(2)
         self.panel.input_preview.setCurrentIndex(2)
         self.panel.reset_input.click()
-        self.assertEqual(self.panel.chroma_settings(), ChromaKeySettings())
+        self.assertEqual(
+            self.panel.chroma_settings(),
+            self.window.gui_defaults.input.key,
+        )
         self.assertEqual(self.panel.input_preview.currentData(), "scene")
         self.assertEqual(self.panel.input_mirror.currentData(), "default")
         self.assertIs(self.window.static_source.frame, frame)
-        self.assertFalse(self.panel.key_color.isEnabled())
+        self.assertEqual(
+            self.panel.key_color.isEnabled(),
+            self.window.gui_defaults.input.key.enabled,
+        )
 
     def test_color_dialog_cancel_and_invalid_gray_keep_previous_color(self):
         self.panel.key_enabled.setChecked(True)

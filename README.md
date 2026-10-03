@@ -97,8 +97,9 @@ greenscreen, Sky background, Source placement, Source relative to lens, Lens,
 View, and Print / export. Expansion defaults are configured in
 `data/defaults.ini`. Click a section header to expand/collapse it; values and
 enabled states are retained. The reset icon at the right of a settings section
-restores that section's configured defaults; Source returns to Desktop and Sky
-background restores its bundled image. Print / export has no reset icon.
+restores that section's configured defaults; Sky background restores its bundled
+image and Source restores the configured default input (currently the Hand
+example). Print / export has no reset icon.
 Ctrl+F opens the required camera sections when selection is needed. The panel
 scrolls vertically when the window is short.
 Mask Radius is shown only in De-lensing mode.
@@ -205,16 +206,17 @@ of the usual 160) and restore the selected lens settings afterwards.
 
 ### Selecting a webcam
 
-The application starts with **Desktop** capture and does not open or probe any
-camera until you request it.
+The application starts with the supplied **Hand example** as a static input.
+The input-source menu lists **Static image**, **Webcam**, then **Desktop**; it
+does not open or probe a camera until you request one.
 
 1. In the **Source** group, click **Refresh** to check camera indices 0 through 4.
 2. Choose a discovered **Camera N**, then choose **Webcam** as the input source.
 3. Alternatively, enter an index (0-99) and click **Use index / retry** to open it
    directly. Index 0 commonly refers to the integrated webcam; external cameras
    may use another index. These indices are not stable device names.
-4. Choose **Desktop** to return to screen capture. **Ctrl+F** toggles between the
-   desktop and the selected webcam; without a selection, it reveals the camera
+4. Choose **Desktop** to return to screen capture. **Ctrl+F** toggles between
+   Desktop and the selected webcam; without a selection, it reveals the camera
    controls rather than guessing a device.
 
 Webcam frames are center-cropped to a square and mirrored. Portrait, landscape,
@@ -246,13 +248,16 @@ In the **Source** group:
   as the input, not the sky. **Load image...** selects another local PNG/JPEG.
   Images are decoded once, stay unmirrored, and initially use **Fit** to show the
   whole photograph. **Fill** center-crops to fill the source canvas.
-- **Freeze input** captures the current desktop region or webcam frame and
-  switches to **Static image**. Webcam freezing releases the camera and retains
-  its mirrored, center-cropped preview. The stored pixels remain unmirrored.
+- **Freeze webcam** is a prominent two-state toggle outside the camera setup
+  controls. It captures the current webcam frame and releases the camera; click
+  **Resume webcam** to reopen that camera. It is disabled until a webcam is
+  connected, and the frozen frame keeps its mirrored preview while storing the
+  original unmirrored pixels.
 - Static mode stops live acquisition, not rendering: lens parameters, view
   modes, sky selection, and source size/position remain adjustable.
-- Select **Desktop** or **Webcam** to resume live input. Selecting **Static image**
-  again restores the last loaded/frozen input; if none exists, a file picker opens.
+- Select **Desktop** or **Webcam** in the input-source menu to change the live
+  source. Selecting **Static image** restores the last loaded image; if none
+  exists, a file picker opens.
 - **Save input...** saves the original input at its captured/loaded resolution,
   before framing, mirroring, lensing, sky composition, or overlays. PNG is the
   default and preserves calibration pixels exactly; JPEG is also available but
@@ -322,8 +327,9 @@ the mask preview on your setup.
 
 ### Printable A4 PDF
 
-1. Click **Freeze input**, or load a static image / **Hand example**. Lens and
-   greenscreen controls remain adjustable; a frozen input does not lock the UI.
+1. Use the default **Hand example**, load a static image, or click **Freeze webcam**
+   when a webcam is connected. Lens and greenscreen controls remain adjustable;
+   a frozen input does not lock the UI.
 2. Configure the foreground, input zoom/mirroring, lens, optional Cross/Cusp/Fold
    placement, sky and post-lens source placement as desired.
 3. Turn off **De-lensing**. Open **Print / export** and select **Export A4 PDF...**

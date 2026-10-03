@@ -14,6 +14,7 @@ class SourceDefaults:
     expanded: bool
     camera_setup_expanded: bool
     camera_index: int
+    default_source: str
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,7 @@ class GuiDefaults:
 
 
 SECTION_KEYS = {
-    "Source": {"expanded", "camera_setup_expanded", "camera_index"},
+    "Source": {"expanded", "camera_setup_expanded", "camera_index", "default_source"},
     "Input / greenscreen": {
         "expanded",
         "key_enabled",
@@ -241,6 +242,7 @@ def load_gui_defaults(path: str | Path | None = None) -> GuiDefaults:
             _boolean(source, "Source", "expanded", path),
             _boolean(source, "Source", "camera_setup_expanded", path),
             _integer(source, "Source", "camera_index", 0, 99, path),
+            _choice(source, "Source", "default_source", ("desktop", "hand_example"), path),
         ),
         InputDefaults(
             _boolean(input_settings, "Input / greenscreen", "expanded", path),

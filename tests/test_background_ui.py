@@ -31,6 +31,7 @@ class BackgroundIntegrationTests(unittest.TestCase):
         self.window.dual_checkbox.setChecked(False)
         self.window.critical_checkbox.setChecked(False)
         self.window.lenslight_checkbox.setChecked(False)
+        self.window._use_desktop()
         self.window.resize(650, 350)
         self.window.show()
         self.application.processEvents()

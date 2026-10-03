@@ -71,7 +71,10 @@ class CameraIntegrationTests(unittest.TestCase):
         self.assertFalse(self.window.cam)
         self.assertFalse(self.window.camera_worker.isRunning())
         self.assertFalse(self.captures)
-        self.assertEqual(self.window.settings_panel.source_selector.currentData(), "desktop")
+        self.assertTrue(self.window.static_active)
+        self.assertEqual(
+            self.window.settings_panel.source_selector.currentData(), "static"
+        )
 
     def test_ctrl_f_without_selection_reveals_selector(self):
         self.window.HideGUI()
@@ -117,6 +120,7 @@ class CameraIntegrationTests(unittest.TestCase):
         self.assertFalse(self.captures[0].released)
 
     def test_failed_open_from_desktop_stays_desktop(self):
+        self.window._use_desktop()
         self.window.settings_panel.camera_index.setValue(9)
         self.window.settings_panel.open_camera.click()
         self.wait_until(lambda: self.window._pending_camera is None)
@@ -125,6 +129,7 @@ class CameraIntegrationTests(unittest.TestCase):
         self.assertIn("Cannot open camera 9", self.window.settings_panel.source_status.text())
 
     def test_invalid_desktop_frame_is_reported_without_black_fallback(self):
+        self.window._use_desktop()
         before = self.window.label.pixmap().toImage()
         with patch.object(self.window, "capture_screen_rect", return_value=None):
             self.window.update_view()

@@ -121,7 +121,8 @@ class PolishedUiTests(unittest.TestCase):
             panel.source_section.reset_button.click()
         self.assertEqual(panel.camera_index.value(), defaults.source.camera_index)
         self.assertIsNone(self.window.selected_camera_index)
-        self.assertFalse(self.window.static_active)
+        self.assertTrue(self.window.static_active)
+        self.assertEqual(panel.source_selector.currentData(), "static")
 
         for checkbox, default in (
             (panel.critical_checkbox, defaults.view.critical_curve),
@@ -253,6 +254,7 @@ class PolishedUiTests(unittest.TestCase):
             )
 
     def test_zoom_is_applied_to_opaque_live_input_before_lensing(self):
+        self.window._use_desktop()
         with patch.object(self.window, "update_single_view") as render:
             self.panel.input_frame_mode.setCurrentIndex(2)
             self.panel.input_zoom.setValue(200)

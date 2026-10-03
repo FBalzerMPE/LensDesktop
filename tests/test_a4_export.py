@@ -4,13 +4,16 @@ import re
 import tempfile
 import unittest
 from unittest.mock import patch
+from dataclasses import replace
 
 import numpy as np
 
-from LensDesktop.a4_export import PAGE_SIZE_MM, PRINT_DPI, write_a4_pdf
+from LensDesktop.a4_export import (
+    MONTAGE_SIZE, PAGE_SIZE_MM, PRINT_DPI, PRINT_SIDE, write_a4_pdf,
+)
 from LensDesktop.processing import ChromaKeySettings, ImageError
 from LensDesktop.qt_compat import QtCore, QtGui, QtPrintSupport, QtWidgets
-from LensDesktop.scene import InputSettings, SceneSnapshot, sky_attribution
+from LensDesktop.scene import DisplaySettings, InputSettings, SceneSnapshot, render_snapshot, sky_attribution
 from LensDesktop.a4_export import print_a4_snapshot
 
 
@@ -49,6 +52,21 @@ class A4PdfTests(unittest.TestCase):
         self.assertGreaterEqual(result.montage.shape[1], 186 / 25.4 * PRINT_DPI)
         self.assertGreaterEqual(data.count(b"/Subtype /Image"), 7)
 
+    def test_pdf_montage_omits_critical_curve_even_when_gui_setting_is_on(self):
+        snapshot = replace(self.snapshot(), display=DisplaySettings(curves=True))
+        without_curve = render_snapshot(
+            snapshot,
+            side=PRINT_SIDE,
+            montage_size=MONTAGE_SIZE,
+            include_montage_critical_curve=False,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            result = write_a4_pdf(snapshot, Path(directory) / "page.pdf")
+        self.assertTrue(snapshot.display.curves)
+        self.assertTrue(result.critical_curves)
+        self.assertIs(result.snapshot, snapshot)
+        np.testing.assert_array_equal(result.montage, without_curve.montage)
+
     def test_write_error_is_explicit_and_failed_render_preserves_existing_pdf(self):
         snapshot = self.snapshot()
         with tempfile.TemporaryDirectory() as directory:
@@ -79,11 +97,20 @@ class A4PdfTests(unittest.TestCase):
                     QtCore.QMarginsF(0, 0, 0, 0),
                 )
             )
-            scene = print_a4_snapshot(self.snapshot(), printer)
+            snapshot = replace(self.snapshot(), display=DisplaySettings(curves=True))
+            scene = print_a4_snapshot(snapshot, printer)
             data = path.read_bytes()
         self.assertTrue(data.startswith(b"%PDF-"))
         self.assertEqual(len(re.findall(rb"/Type\s*/Page\b", data)), 1)
         self.assertEqual(scene.montage.shape[1], 2197)
+        self.assertTrue(scene.critical_curves)
+        without_curve = render_snapshot(
+            snapshot,
+            side=PRINT_SIDE,
+            montage_size=MONTAGE_SIZE,
+            include_montage_critical_curve=False,
+        )
+        np.testing.assert_array_equal(scene.montage, without_curve.montage)
 
     def test_default_and_custom_attribution_are_not_confused(self):
         data = Path(__file__).resolve().parent.parent / "data"
