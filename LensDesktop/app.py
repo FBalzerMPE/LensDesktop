@@ -686,7 +686,10 @@ class LensDesktop(QtWidgets.QMainWindow):
             button.setText(label)
             button.setAccessibleName(label)
             button.setEnabled(
-                available and not connecting and not self._camera_fault and not self._closing
+                available
+                and not connecting
+                and not self._camera_fault
+                and not self._closing
             )
 
     def _sync_export_controls(self):
